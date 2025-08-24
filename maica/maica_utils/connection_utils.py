@@ -299,14 +299,14 @@ class ConnUtils():
         return AiConnCoroutine(
             api_key='EMPTY',
             base_url=MCORE_ADDR,
-            name='mcore_cli'
+            #name='mcore_cli'
         )
 
     def mfocus_conn():
         return AsyncOpenAI(
             api_key='EMPTY',
             base_url=MFOCUS_ADDR,
-            name='mfocus_cli'
+            #name='mfocus_cli'
         )
 
 async def validate_input(input: Union[str, dict, list], limit: int=4096, rsc: Optional[FSCPlain.RealtimeSocketsContainer]=None, must: list=[], warn: list=[]) -> Union[dict, list]:
