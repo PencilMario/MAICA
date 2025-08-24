@@ -18,7 +18,7 @@ from .container_utils import *
 db_host = load_env('DB_ADDR')
 db_user = load_env('DB_USER')
 db_password = load_env('DB_PASSWORD')
-authdb = load_env('AUTH_DB')
+authdb = load_env('AUTHENTICATOR_DB')
 maicadb = load_env('MAICA_DB')
 
 def _get_keys() -> tuple[PKCS1_OAEP.PKCS1OAEP_Cipher, PKCS1_OAEP.PKCS1OAEP_Cipher, PSS_SigScheme, PSS_SigScheme]:

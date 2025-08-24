@@ -10,8 +10,9 @@ from .setting_utils import *
 DB_ADDR = load_env('DB_ADDR')
 DB_USER = load_env('DB_USER')
 DB_PASSWORD = load_env('DB_PASSWORD')
-AUTH_DB = load_env('AUTH_DB')
+AUTH_DB = load_env('AUTHENTICATOR_DB')
 MAICA_DB = load_env('MAICA_DB')
+USE_SQLITE = load_env('USE_SQLITE', 'disabled')
 MCORE_ADDR = load_env('MCORE_ADDR')
 MFOCUS_ADDR = load_env('MFOCUS_ADDR')
 
@@ -29,6 +30,96 @@ class DbPoolCoroutine():
             # We assume it's SQLite
             # If you're connecting to MySQL through a socket, redesign it yourself
             pass
+
+
+class SqliteDbPoolCoroutine(DbPoolCoroutine):
+    """SQLite-specific database pool coroutine."""
+    
+    def __init__(self, db_path, ro=False):
+        self.db_path = db_path
+        self.ro = ro
+        self.pool = None
+        asyncio.run(self._ainit())
+
+    async def _ainit(self):
+        """Initialize SQLite connection pool."""
+        try:
+            self.pool = aiosqlite.connect(self.db_path)
+            await self.pool.__aenter__()
+            if self.ro:
+                await self.pool.execute("PRAGMA query_only = ON")
+        except Exception as e:
+            error = MaicaDbError(f'Failed to initialize SQLite connection: {str(e)}', '502')
+            await messenger(None, 'sqlite_init_failure', traceray_id='db_handling', error=error)
+
+    async def keep_alive(self):
+        """Check and maintain SQLite connection."""
+        try:
+            await self.pool.execute("SELECT 1")
+        except Exception:
+            await messenger(None, f'{self.db_path}_reconn', f"Recreating {self.db_path} connection", '301', type='warn')
+            try:
+                if self.pool:
+                    await self.pool.close()
+                await self._ainit()
+            except Exception:
+                error = MaicaDbError(f'Failure when trying to reconnect to {self.db_path}', '502')
+                await messenger(None, f'{self.db_path}_reconn_failure', traceray_id='db_handling', error=error)
+
+    async def query_get(self, expression, values=None, fetchall=False) -> list:
+        """Execute SELECT query on SQLite database."""
+        results = None
+        for tries in range(0, 3):
+            try:
+                await self.keep_alive()
+                if not values:
+                    cursor = await self.pool.execute(expression)
+                else:
+                    cursor = await self.pool.execute(expression, values)
+                results = await cursor.fetchone() if not fetchall else await cursor.fetchall()
+                await cursor.close()
+                break
+            except Exception:
+                if tries < 2:
+                    await messenger(info=f'SQLite temporary failure, retrying {str(tries + 1)} time(s)')
+                    await asyncio.sleep(0.5)
+                else:
+                    error = MaicaDbError(f'SQLite connection failure after {str(tries + 1)} times', '502')
+                    await messenger(None, 'sqlite_connection_failed', traceray_id='db_handling', error=error)
+        return results
+
+    async def query_modify(self, expression, values=None, fetchall=False) -> int:
+        """Execute INSERT/UPDATE/DELETE query on SQLite database."""
+        if self.ro:
+            error = MaicaDbError(f'DB marked as ro, no modify permitted', '403')
+            await messenger(None, 'sqlite_modification_denied', traceray_id='db_handling', error=error)
+            return None
+            
+        lrid = None
+        for tries in range(0, 3):
+            try:
+                await self.keep_alive()
+                if not values:
+                    cursor = await self.pool.execute(expression)
+                else:
+                    cursor = await self.pool.execute(expression, values)
+                await self.pool.commit()
+                lrid = cursor.lastrowid
+                await cursor.close()
+                break
+            except Exception:
+                if tries < 2:
+                    await messenger(info=f'SQLite temporary failure, retrying {str(tries + 1)} time(s)')
+                    await asyncio.sleep(0.5)
+                else:
+                    error = MaicaDbError(f'SQLite connection failure after {str(tries + 1)} times', '502')
+                    await messenger(None, 'sqlite_connection_failed', traceray_id='db_handling', error=error)
+        return lrid
+
+    async def close(self):
+        """Close SQLite connection."""
+        if self.pool:
+            await self.pool.close()
 
     async def keep_alive(self):
         try:
@@ -158,21 +249,51 @@ class AiConnCoroutine():
 class ConnUtils():
     """Just a wrapping for functions."""
     def auth_pool():
-        return DbPoolCoroutine(
-            host=DB_ADDR,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            db=AUTH_DB,
-            ro=True,
-        )
+        """Create authentication database pool (auto-selects SQLite or MySQL)."""
+        if USE_SQLITE.lower() == 'enabled':
+            return SqliteDbPoolCoroutine(db_path=AUTH_DB, ro=True)
+        else:
+            return DbPoolCoroutine(
+                host=DB_ADDR,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                db=AUTH_DB,
+                ro=True,
+            )
 
     def maica_pool():
+        """Create MAICA database pool (auto-selects SQLite or MySQL)."""
+        if USE_SQLITE.lower() == 'enabled':
+            return SqliteDbPoolCoroutine(db_path=MAICA_DB, ro=False)
+        else:
+            return DbPoolCoroutine(
+                host=DB_ADDR,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                db=MAICA_DB,
+            )
+
+    def sqlite_pool(db_path, ro=False):
+        """Create SQLite database pool."""
+        return SqliteDbPoolCoroutine(db_path=db_path, ro=ro)
+
+    def mysql_pool(host, user, password, db, ro=False):
+        """Create MySQL database pool."""
         return DbPoolCoroutine(
-            host=DB_ADDR,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            db=MAICA_DB,
+            host=host,
+            user=user, 
+            password=password,
+            db=db,
+            ro=ro
         )
+
+    def local_maica_pool():
+        """Create SQLite pool for local maica.db."""
+        return SqliteDbPoolCoroutine(db_path='maica.db', ro=False)
+
+    def local_auth_pool():
+        """Create SQLite pool for local flarum.db (read-only)."""
+        return SqliteDbPoolCoroutine(db_path='flarum.db', ro=True)
 
     def mcore_conn(rsc):
         return AiConnCoroutine(
