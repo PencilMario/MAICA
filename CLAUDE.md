@@ -21,7 +21,7 @@ The startup scripts launch multiple processes:
 
 ### Dependencies
 - Install dependencies: `pip install -r requirements.txt`
-- Project uses Python 3.10+ with virtual environment in `maica/` directory
+- Project uses Python 3.13 with virtual environment in `maica/` directory
 
 ## Architecture
 
