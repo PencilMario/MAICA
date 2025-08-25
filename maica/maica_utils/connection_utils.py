@@ -15,6 +15,8 @@ MAICA_DB = load_env('MAICA_DB')
 USE_SQLITE = load_env('USE_SQLITE', 'disabled')
 MCORE_ADDR = load_env('MCORE_ADDR')
 MFOCUS_ADDR = load_env('MFOCUS_ADDR')
+API_KEY = load_env('API_KEY', 'EMPTY')
+MODEL_NAME = load_env('MODEL_NAME', 'gpt-3.5-turbo')
 
 class DbPoolCoroutine():
     """Maintain a database connection pool so you don't have to."""
@@ -219,6 +221,9 @@ class AiConnCoroutine():
                 await messenger(None, f'{self.name}_reconn_failure', traceray_id='ai_handling', type='error')
 
     async def use_model(self, model: Union[int, str]=0):
+        if model == 0 and MODEL_NAME != 'EMPTY':
+            model = MODEL_NAME
+        
         assert isinstance(model, Union[int, str]), "Model choice unrecognizable"
         self.model = model
         if isinstance(model, int):
@@ -297,14 +302,14 @@ class ConnUtils():
 
     def mcore_conn():
         return AiConnCoroutine(
-            api_key='EMPTY',
+            api_key=API_KEY,
             base_url=MCORE_ADDR,
             #name='mcore_cli'
         )
 
     def mfocus_conn():
-        return AsyncOpenAI(
-            api_key='EMPTY',
+        return AiConnCoroutine(
+            api_key=API_KEY,
             base_url=MFOCUS_ADDR,
             #name='mfocus_cli'
         )
