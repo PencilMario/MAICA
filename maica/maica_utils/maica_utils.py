@@ -69,7 +69,7 @@ class MaicaInternetWarning(CommonMaicaWarning):
     """This suggests the backend request action is not behaving normal."""
 
 class FSCPlain():
-    """Loop importing prevention"""
+    """Loop importing prevention."""
     class RealtimeSocketsContainer():
         """For no-setting usage."""
         def __init__(self, websocket, traceray_id):
@@ -82,6 +82,17 @@ class FSCPlain():
         self.maica_pool = maica_pool
         self.mcore_conn = mcore_conn
         self.mfocus_conn = mfocus_conn
+
+class AsyncCreator():
+    """Inherit this for async init."""
+    async def _ainit(self):
+        pass
+
+    @classmethod
+    async def async_create(cls, *args, **kwargs):
+        instance = cls(*args, **kwargs)
+        await instance._ainit()
+        return instance
 
 class LoginResult():
     """
@@ -133,6 +144,8 @@ class ReUtils():
     re_findall_quoted = re.compile(r'"(.*?)"') # Normally we request JSON so we consider double quotes only
     re_search_location_prompt = re.compile(r'(地区|周边|附近|周围|nearby|local)', re.I)
     re_search_location_related = re.compile(r'(天气|温度|路况|降雨|weather|traffic|temperature|rain)', re.I)
+    re_search_host_addr = re.compile(r"^https?://(.*?)(:|/|$).*", re.I)
+    re_sub_capt_status = re.compile(r"(_|^)([A-Za-z])")
 
 def default(exp, default, default_list: list=[None]) -> any:
     """If exp is in default list(normally None), use default."""
@@ -149,6 +162,13 @@ def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) 
     output.update(kwargs)
     return json.dumps(output, ensure_ascii=deformation)
 
+def ellipsis_str(input: any, limit=80) -> str:
+    """It converts anything to str and ellipsis it."""
+    text = str(input)
+    if len(text) > limit:
+        text = text[:limit] + '...'
+    return text
+
 def fuzzy_match(pattern: str, text):
     """Mostly used in agent things."""
     if pattern == text:
@@ -162,12 +182,18 @@ def fuzzy_match(pattern: str, text):
         expression = pattern.replace('_', r'.*')
         return re.match(expression, text, re.I | re.S)
 
+def words_upper(text: str) -> str:
+    """Overkill..."""
+    def u_upper(c: re.Match):
+        return f'{c[1]}{c[2].upper()}'
+    return ReUtils.re_sub_capt_status.sub(u_upper, text)
+
 async def messenger(websocket=None, status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaError]=None, prefix='', type='', color='', add_time=True, no_print=False) -> None:
     """It could handle most log printing, websocket sending and exception raising jobs pretty automatically."""
     if error:
         info = error.message if not info else info; code = error.error_code if code == "0" else code
     if type and not prefix and not 100 <= int(code) < 200:
-        prefix = type.capitalize()
+        prefix = words_upper(type)
 
     match int(code):
         case 0:
@@ -216,6 +242,16 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
                 print((color or '') + msg_print)
             case "log":
                 print((color or colorama.Fore.BLUE) + msg_print)
+            case "prim_log":
+                print((color or colorama.Fore.LIGHTBLUE_EX) + msg_print)
+            case "sys":
+                print((color or colorama.Fore.MAGENTA) + msg_print)
+            case "prim_sys":
+                print((color or colorama.Fore.LIGHTMAGENTA_EX) + msg_print)
+            case "recv":
+                print((color or colorama.Fore.CYAN) + msg_print)
+            case "prim_recv":
+                print((color or colorama.Fore.LIGHTCYAN_EX) + msg_print)
             case "warn":
                 if load_env("PRINT_VERBOSE") == "1" and prefix.lower() in frametrack_list:
                     print(color or colorama.Fore.YELLOW + f"WARN happened when executing {stack[0].function} at {stack[0].filename}#{stack[0].lineno}:")
