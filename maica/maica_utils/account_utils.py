@@ -22,11 +22,54 @@ authdb = load_env('AUTHENTICATOR_DB')
 maicadb = load_env('MAICA_DB')
 
 def _get_keys() -> tuple[PKCS1_OAEP.PKCS1OAEP_Cipher, PKCS1_OAEP.PKCS1OAEP_Cipher, PSS_SigScheme, PSS_SigScheme]:
-    key_path = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(key_path, "../../key/prv.key"), "r") as privkey_file:
-        privkey = privkey_file.read()
-    with open(os.path.join(key_path, "../../key/pub.key"), "r") as pubkey_file:
-        pubkey = pubkey_file.read()
+    use_hardcoded_key = load_env('USE_HARDCODED_KEY', 'false').lower() == 'true'
+    
+    if use_hardcoded_key:
+        privkey = '''-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC6edywthG3eFFm
+mxcHKemAVgpCZEj/gfrbyih54Wwhr4/OOGOE2/WDJ6qdBM5/pMjK6Cdv0PaV9/xj
+MWnUJytlThXTlGzb3uQopxNtX06uHiW7Ym+KlOB27/gmpOORIbN3OwoUv6ibEY/E
+43SOb8ZG/6vLnG/xwF2iGID8+9ZKdMiH5HCdFmzzvR0yoiKPCQwGtWL9Pgmwk2wz
+5XDH3pCJNH4MksJJKsdsIPOPkKE6bmg1tUgHfkBdkXME10OeeipWa6hzx4uXH1bU
+Pd21Bp8Q06PIX/tbmYI2DOfUKgmGIcbwNOCDihn424O0ImrnAGondh9Abwsd3v7L
+ZgvH4nyrAgMBAAECggEAAnssnI1PnwlSy/K0U7wTB0odyNRcxEmOdO4zq6t8LNaR
+K0VEzbe/hIc6lexCcyBWK5z7KVm2bjhme0tlBRWgVjC7yZzn9eT5VDEk6QejnF16
+Uwv0P/vLIMoAm0MGZB/2q1d1wuDp9WY+a3g7TMnf8YHlX0gtlSHiHQ4GaVdQep0d
+VQPffovPJnSzmVVrvNk2ksZYsD+krNgo7vIzp6QYjtVF8z5HC3Y83YTps+7LKMH0
+g+YkC7oFCIaGO5X3RtPDs6Y4xx6KfTx7QNaFhUggvXqYWJxGdc33zKyV+Oc45iav
+xCCPeTN9wkhJDKz2i18jjQh0hWVY0NcwzwfebJGwgQKBgQDzEYNcqvkG0NC2Ioop
+KJLSxMeKOpdmHC/CLJPJftrSLm2jqvEycWRnfm58Um5QndIyl6p8tn7OCKfQc8u3
+Ra1w9Q2l0Uylm6AoO1f5ewIFHKK6++qWMt5S5Mxwrd7hMGOQM+Qpt8IgRqiyrY/h
+IeezcD5kWPKmRUF8VzIzUiTW8wKBgQDEZZXFuyBshG9SgIc4JZhyzWb1WzbO4tKz
+r3/cwzda2j06hffKDD4O+OsPpq0md+EewtckBA+p85MZuhZzdBcjPZK6m6JaTgA2
+bhoLCWMghyzZxA5UG7AlJbBsJMTBxD//5CVhunhtbqmeP4XZhl0j4FEb1CYFFa13
+O6L6YushaQKBgBFDyi/X2Q5Z4Kk/NM8Nmbgsz/uKg9x13hKNtgWW5BYPxCve5Xju
+wvHy8ggUls9VFmwPh8WJ9OHPjZPp1atz4Ijobwq7HhWZQzv4UxxeV1tjmE9tu1Dl
+1hLPO5I5V15pYHkKpocsDTbbrfnbCCA2l02QiG36P2n9+1PIocExcXpvAoGAcHq1
+on8ffMcEcr3Fs7RkcSuOUeshoq9peRuEIU10wIXJF2FunrsQN8b76QTOmf+CYPm5
++ZiR2AX2M3/OJ+VO8xHqnRFRlGKj4IiCRdvkd9azKy0L/8OzyDKjrewI++iHtuhV
+OHlxS0tbvZQn9oLriQaJrWR9OeBGbskq+Df67jECgYA26eaggeTaL/xnIA1GcdwR
+j/XAHTPRTJC8GU5/B78IHQdfnpCJ92O/bpV+lpmL3nrGmdVvsb3M+AkXoEM5MC0B
+uu+f7P84wpo3a10vnqZ6aSuCoiLc97MXpGrgwHbpKdD0EZF0Uj4K2CQSdzxl6vRC
+7skes6242wQmI8DLQMW+gA==
+-----END PRIVATE KEY-----
+'''
+        pubkey = '''-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAunncsLYRt3hRZpsXBynpgFYKQmRI/4H628ooeeFsIa+PzjhjhNv1
+gyeqnQTOf6TIyugnb9D2lff8YzFp1CcrZU4V05Rs297kKKcTbV9Orh4lu2JvipTg
+du/4JqTjkSGzdzsKFL+omxGPxON0jm/GRv+ry5xv8cBdohiA/PvWSnTIh+RwnRZs
+870dMqIijwkMBrVi/T4JsJNsM+Vwx96QiTR+DJLCSSrHbCDzj5ChOm5oNbVIB35A
+XZFzBNdDnnoqVmuoc8eLlx9W1D3dtQafENOjyF/7W5mCNgzn1CoJhiHG8DTgg4oZ
++NuDtCJq5wBqJ3YfQG8LHd7+y2YLx+J8qwIDAQAB
+-----END RSA PUBLIC KEY-----'''
+        print("!!!You are using a hard-coded key, please ensure it is only used locally!!!")
+    else:
+        key_path = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(key_path, "../../key/prv.key"), "r") as privkey_file:
+            privkey = privkey_file.read()
+        with open(os.path.join(key_path, "../../key/pub.key"), "r") as pubkey_file:
+            pubkey = pubkey_file.read()
+    
     pubkey_loaded = RSA.import_key(pubkey)
     privkey_loaded = RSA.import_key(privkey)
     encryptor = PKCS1_OAEP.new(pubkey_loaded)
