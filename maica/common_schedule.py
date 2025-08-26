@@ -5,7 +5,8 @@ import schedule
 from typing import *
 from maica_utils import *
 
-async def rotate_cache(maica_pool: DbPoolCoroutine=None):
+async def rotate_cache(maica_pool: DbPoolCoroutine):
+    """Always provide a pool in production deployment!"""
     maica_pool = default(maica_pool, await ConnUtils.maica_pool())
     keep_time = load_env('ROTATE_MSCACHE')
     if int(keep_time):
@@ -20,9 +21,17 @@ async def rotate_cache(maica_pool: DbPoolCoroutine=None):
 def wrap_rotate_cache(maica_pool=None):
     asyncio.run(rotate_cache(maica_pool))
 
-async def schedule_rotate_cache(*args, **kwargs):
+async def schedule_rotate_cache(**kwargs):
+    await messenger(info="MAICA scheduler started!", type=MsgType.SYS)
     if load_env('ROTATE_MSCACHE') != '0':
-        schedule.every().day.at("04:00").do(wrap_rotate_cache, *args, **kwargs)
-    while True:
-        schedule.run_pending()
-        asyncio.sleep(60)
+        await messenger()
+        schedule.every().day.at("04:00").do(wrap_rotate_cache, **kwargs)
+    try:
+        while True:
+            schedule.run_pending()
+            await asyncio.sleep(60)
+    except BaseException:
+        pass
+    finally:
+        await messenger(info='\n', type=MsgType.PLAIN)
+        await messenger(info="MAICA scheduler stopped!", type=MsgType.SYS)

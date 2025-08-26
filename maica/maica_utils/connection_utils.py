@@ -25,6 +25,73 @@ class DbPoolCoroutine(AsyncCreator):
 
     async def _ainit(self):
         self.pool: aiomysql.Pool = await aiomysql.create_pool(host=self.host, user=self.user, password=self.password, db=self.db)
+
+    async def keep_alive(self):
+        try:
+            async with self.pool.acquire():
+                pass
+        except Exception:
+            await messenger(None, f'{self.db}_reconn', f"Recreating {self.db} pool since cannot acquire", '301', type=MsgType.WARN)
+            try:
+                self.pool.close()
+                await self._ainit()
+            except Exception:
+                error = MaicaDbError(f'Failure when trying reconnecting to {self.db}', '502')
+                await messenger(None, f'{self.db}_reconn_failure', traceray_id='db_handling', type=MsgType.ERROR)
+
+    async def query_get(self, expression, values=None, fetchall=False) -> list:
+        results = None
+        for tries in range(0, 3):
+            try:
+                await self.keep_alive()
+                async with self.pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        if not values:
+                            await cur.execute(expression)
+                        else:
+                            await cur.execute(expression, values)
+                        results = await cur.fetchone() if not fetchall else await cur.fetchall()
+                break
+            except Exception:
+                if tries < 2:
+                    await messenger(info=f'DB temporary failure, retrying {str(tries + 1)} time(s)')
+                    await asyncio.sleep(0.5)
+                else:
+                    error = MaicaDbError(f'DB connection failure after {str(tries + 1)} times', '502')
+                    await messenger(None, 'db_connection_failed', traceray_id='db_handling', error=error)
+        return results
+
+    async def query_modify(self, expression, values=None, fetchall=False) -> int:
+        if self.ro:
+            error = MaicaDbError(f'DB marked as ro, no modify permitted', '403')
+            await messenger(None, 'db_modification_denied', traceray_id='db_handling', error=error)
+        lrid = None
+        for tries in range(0, 3):
+            try:
+                await self.keep_alive()
+                async with self.pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        if not values:
+                            await cur.execute(expression)
+                        else:
+                            await cur.execute(expression, values)
+                        await conn.commit()
+                        lrid = cur.lastrowid
+                break
+            except Exception:
+                if tries < 2:
+                    await messenger(info=f'DB temporary failure, retrying {str(tries + 1)} time(s)')
+                    await asyncio.sleep(0.5)
+                else:
+                    error = MaicaDbError(f'DB connection failure after {str(tries + 1)} times', '502')
+                    await messenger(None, 'db_connection_failed', traceray_id='db_handling', error=error)
+        return lrid
+    
+    async def close(self):
+        """These connection pools shouldn't be closed manually in runtime. We implement it anyway."""
+        self.pool.close()
+        await self.pool.wait_closed()
+
 class SqliteDbPoolCoroutine(DbPoolCoroutine):
     """SQLite-specific database pool coroutine."""
     
@@ -49,7 +116,7 @@ class SqliteDbPoolCoroutine(DbPoolCoroutine):
         try:
             await self.pool.execute("SELECT 1")
         except Exception:
-            await messenger(None, f'{self.db_path}_reconn', f"Recreating {self.db_path} connection", '301', type='warn')
+            await messenger(None, f'{self.db_path}_reconn', f"Recreating {self.db_path} connection", '301', type=MsgType.WARN)
             try:
                 if self.pool:
                     await self.pool.close()
@@ -141,13 +208,13 @@ class AiConnCoroutine(AsyncCreator):
             else:
                 self.model_actual = self.model
         except Exception:
-            await messenger(None, f'{self.name}_reconn', f"Recreating {self.name} client since cannot conn", '301', type='warn')
+            await messenger(None, f'{self.name}_reconn', f"Recreating {self.name} client since cannot conn", '301', type=MsgType.WARN)
             try:
                 await self.socket.close()
                 await self._ainit()
             except Exception:
                 error = MaicaResponseError(f'Failure when trying reconnecting to {self.name}', '502')
-                await messenger(None, f'{self.name}_reconn_failure', traceray_id='ai_handling', type='error')
+                await messenger(None, f'{self.name}_reconn_failure', traceray_id='ai_handling', type=MsgType.ERROR)
 
     async def use_model(self, model: Union[int, str]=0):
         if model == 0 and MODEL_NAME != 'EMPTY':
