@@ -182,7 +182,7 @@ class AiConnCoroutine(AsyncCreator):
 
 class ConnUtils():
     """Just a wrapping for functions."""
-    if vali_url(DB_ADDR):
+    if vali_url(DB_ADDR) and USE_SQLITE.lower() != 'enabled':
         """We suppose we're using MySQL."""
         def auth_pool():
             return DbPoolCoroutine.async_create(
@@ -216,7 +216,7 @@ class ConnUtils():
         return AiConnCoroutine.async_create(
             api_key='EMPTY',
             base_url=MCORE_ADDR,
-            #name='mcore_cli'
+            name='mcore_cli'
         )
 
     def mfocus_conn():
