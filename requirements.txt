@@ -13,7 +13,7 @@ asgiref==3.8.1
 asyncio==3.4.3
 asyncssh==2.21.0
 attrs==24.2.0
-bcrypt==3.2.2
+bcrypt==4.3.0
 beautifulsoup4==4.12.3
 bidict==0.23.1
 blinker==1.9.0
@@ -32,7 +32,7 @@ Flask-Cors==4.0.1
 Flask-SocketIO==4.3.1
 Flask-Sockets==0.2.1
 frozenlist==1.5.0
-gevent==24.2.1
+gevent
 gevent-websocket==0.10.1
 googlesearch-python @ git+https://github.com/edgeinfinity1/Search-Engines-Scraper
 greenlet==3.0.3
@@ -56,7 +56,7 @@ multidict==6.1.0
 mysql==0.0.3
 mysqlclient==2.2.4
 nest-asyncio==1.6.0
-numpy==1.26.4
+#numpy==1.26.4
 openai==1.30.2
 packaging==24.2
 panda==0.3.1
@@ -96,7 +96,7 @@ tensorboard==2.17.0
 tensorboard-data-server==0.7.2
 tqdm==4.66.4
 types-pytz==2024.2.0.20241003
-typing_extensions==4.12.0
+typing_extensions
 tzdata==2024.2
 urllib3==2.2.1
 uvicorn==0.34.0
@@ -111,3 +111,10 @@ yarl==1.18.0
 zhconv==1.4.3
 zope.event==5.0
 zope.interface==6.4.post2
+httpx
+dotenv
+aiomysql
+aiosqlite
+#pydantic-core
+#pydantic
+cffi

@@ -296,10 +296,14 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
         raise error
     return
 
-def load_env(key) -> str:
+def load_env(key, default=None) -> str:
     """Load something from .env."""
     __load_dotenv()
     result = os.getenv(key)
+    if not result:
+        if default is not None:
+            return default
+        raise ValueError("Environment variables are missing.")
     return result
 
 async def wrap_run_in_exc(loop, func, *args, **kwargs) -> any:

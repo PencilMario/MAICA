@@ -10,10 +10,13 @@ from .setting_utils import *
 DB_ADDR = load_env('DB_ADDR')
 DB_USER = load_env('DB_USER')
 DB_PASSWORD = load_env('DB_PASSWORD')
-AUTH_DB = load_env('AUTH_DB')
+AUTH_DB = load_env('AUTHENTICATOR_DB')
 MAICA_DB = load_env('MAICA_DB')
+USE_SQLITE = load_env('USE_SQLITE', 'disabled')
 MCORE_ADDR = load_env('MCORE_ADDR')
 MFOCUS_ADDR = load_env('MFOCUS_ADDR')
+API_KEY = load_env('API_KEY', 'EMPTY')
+MODEL_NAME = load_env('MODEL_NAME', 'gpt-3.5-turbo')
 
 class DbPoolCoroutine(AsyncCreator):
     """Maintain a database connection pool so you don't have to."""
@@ -212,6 +215,17 @@ class AiConnCoroutine(AsyncCreator):
             except Exception:
                 error = MaicaResponseError(f'Failure when trying reconnecting to {self.name}', '502')
                 await messenger(None, f'{self.name}_reconn_failure', traceray_id='ai_handling', type=MsgType.ERROR)
+
+    async def use_model(self, model: Union[int, str]=0):
+        if model == 0 and MODEL_NAME != 'EMPTY':
+            model = MODEL_NAME
+        
+        assert isinstance(model, Union[int, str]), "Model choice unrecognizable"
+        self.model = model
+        if isinstance(model, int):
+            self.model_actual = (await self.socket.models.list())[model].id
+        else:
+            self.model_actual = model
             
     async def make_completion(self, **kwargs):
         for tries in range(0, 3):
@@ -235,7 +249,7 @@ class AiConnCoroutine(AsyncCreator):
 
 class ConnUtils():
     """Just a wrapping for functions."""
-    if vali_url(DB_ADDR):
+    if vali_url(DB_ADDR) and USE_SQLITE.lower() != 'enabled':
         """We suppose we're using MySQL."""
         def auth_pool():
             return DbPoolCoroutine.async_create(
@@ -273,11 +287,12 @@ class ConnUtils():
         )
 
     def mfocus_conn():
-        return AiConnCoroutine.async_create(
-            api_key='EMPTY',
+        return AiConnCoroutine(
+            api_key=API_KEY,
             base_url=MFOCUS_ADDR,
             name='mfocus_cli'
         )
+
 
 async def validate_input(input: Union[str, dict, list], limit: int=4096, rsc: Optional[FscPlain.RealtimeSocketsContainer]=None, must: list=[], warn: list=[]) -> Union[dict, list]:
     """

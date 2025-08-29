@@ -173,3 +173,4 @@ triggers/
 
 easter_egg.py
 test/
+.claude/settings.local.json
