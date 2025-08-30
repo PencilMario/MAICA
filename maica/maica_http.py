@@ -25,6 +25,9 @@ from maica_ws import NoWsCoroutine
 from maica_utils import *
 from nv_watcher import NvWatcher
 
+MCORE_ADDR = load_env('MCORE_ADDR')
+MFOCUS_ADDR = load_env('MFOCUS_ADDR')
+
 app = Quart(import_name=__name__)
 app.config['JSON_AS_ASCII'] = False
 
@@ -379,34 +382,56 @@ else:
 app.add_url_rule("/<path>", methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], view_func=ShortConnHandler.as_view("any_unknown", val=False))
 
 async def prepare_thread(**kwargs):
-    ShortConnHandler.auth_pool = default(kwargs.get('auth_pool'), await ConnUtils.auth_pool())
-    ShortConnHandler.maica_pool = default(kwargs.get('maica_pool'), await ConnUtils.maica_pool())
+    auth_created = False; maica_created = False
 
-    ShortConnHandler.mcore_watcher = await NvWatcher.async_create('mcore')
-    ShortConnHandler.mfocus_watcher = await NvWatcher.async_create('mfocus')
+    if kwargs.get('auth_pool'):
+        ShortConnHandler.auth_pool = kwargs.get('auth_pool')
+    else:
+        ShortConnHandler.auth_pool = await ConnUtils.auth_pool()
+        auth_created = True
+    if kwargs.get('maica_pool'):
+        ShortConnHandler.maica_pool = kwargs.get('maica_pool')
+    else:
+        ShortConnHandler.maica_pool = await ConnUtils.maica_pool()
+        maica_created = True
+
+    if get_host(MCORE_ADDR) != get_host(MFOCUS_ADDR):
+
+        ShortConnHandler.mcore_watcher = await NvWatcher.async_create('mcore')
+        ShortConnHandler.mfocus_watcher = await NvWatcher.async_create('mfocus')
+        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.main_watcher())
+        mfocus_task = asyncio.create_task(ShortConnHandler.mfocus_watcher.main_watcher())
+
+    else:
+
+        ShortConnHandler.mcore_watcher = await NvWatcher.async_create('mcore')
+        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.main_watcher())
+        mfocus_task = None
 
     config = Config()
     config.bind = ['0.0.0.0:6000']
 
     main_task = asyncio.create_task(serve(app, config))
-    mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.main_watcher())
-    mfocus_task = asyncio.create_task(ShortConnHandler.mfocus_watcher.main_watcher())
+    task_list = [main_task, mcore_task]
+    if mfocus_task:
+        task_list.append(mfocus_task)
 
     await messenger(info='MAICA HTTP server started!', type=MsgType.PRIM_SYS)
 
     try:
-        await asyncio.wait([
-            main_task,
-            mcore_task,
-            mfocus_task,
-        ], return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(task_list, return_when=asyncio.FIRST_COMPLETED)
+
     except BaseException:
         pass
     finally:
-        try:
-            asyncio.gather(ShortConnHandler.auth_pool.close(), ShortConnHandler.maica_pool.close())
-        except Exception:
-            pass
+        close_list = []
+        if auth_created:
+            close_list.append(ShortConnHandler.auth_pool.close())
+        if maica_created:
+            close_list.append(ShortConnHandler.maica_pool.close())
+
+        await asyncio.gather(*close_list, return_exceptions=True)
+
         await messenger(info='\n', type=MsgType.PLAIN)
         await messenger(info='MAICA HTTP server stopped!', type=MsgType.PRIM_SYS)
 

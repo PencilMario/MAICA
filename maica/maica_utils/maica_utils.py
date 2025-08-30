@@ -333,16 +333,17 @@ async def get_json(url) -> json:
         await client.aclose()
     return res
 
-def vali_url(url: str) -> bool:
-    """If this is a valid url."""
+def get_host(url: str) -> bool:
+    """Try to get hostname from url."""
     try:
         url_parsed = urlparse(url)
-        if url_parsed.scheme:
-            return True
-        else:
-            return False
+        return url_parsed.hostname
     except Exception:
         return False
+
+def vali_url(url: str) -> bool:
+    """urllib is dumb. It doesn't recognize ip addr so we make it brutal."""
+    return '.' in url
 
 def vali_date(y, m, d) -> tuple[int, int, int]:
     """What a pun!"""
