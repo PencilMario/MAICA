@@ -163,6 +163,7 @@ class ReUtils():
     re_sub_capt_status = re.compile(r"(_|^)([A-Za-z])")
     re_findall_square_marks = re.compile(r'\[(?:(?:[A-Za-z ]{1,15}?)|(?:[一-龥 ]{1,4}?))\]')
     re_findall_square_brackets = re.compile(r'\[(.*?)\]')
+    re_sub_sqlite_escape = re.compile(r'%s')
 
 def default(exp, default, default_list: list=[None]) -> any:
     """If exp is in default list(normally None), use default."""
@@ -292,7 +293,7 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
             case "error":
                 if 'error' in frametrack_dict:
                     for stack_layer in stack[:frametrack_dict['error']]:
-                        print((color or colorama.Fore.RED) + f"! ERROR happened when executing {stack[0].function} at {stack[0].filename}#{stack[0].lineno}:")
+                        print((color or colorama.Fore.RED) + f"! ERROR happened when executing {stack_layer.function} at {stack_layer.filename}#{stack_layer.lineno}:")
                 print((color or colorama.Fore.LIGHTRED_EX) + msg_print)
     if error:
         raise error
