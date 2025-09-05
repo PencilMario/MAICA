@@ -1,20 +1,10 @@
-import sys, os
-def get_basedir():
-    if hasattr(sys, "_MEIPASS"):  # PyInstaller 临时目录
-        # 改为 exe 所在目录
-        return os.path.dirname(sys.executable)
-    else:
-        # 开发环境下直接用当前文件目录
-        return os.path.dirname(os.path.abspath(__file__))
-
-BASE_DIR = get_basedir()
-
 import asyncio
 import maica_ws
 import maica_http
 import common_schedule
 from maica_utils import *
 from initializer import *
+
 
 def check_init():
     if not check_marking():
