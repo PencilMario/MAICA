@@ -10,7 +10,7 @@ jobs:
         uses: theSanguss/pyinstaller-action@patch-1
         with:
           python_ver: '3.11'
-          spec: 'maica_main.py'
+          spec: 'maica_starter.py'
           requirements: 'requirements.txt'
           upload_exe_with_name: 'MAICA'
           options: --onefile, --name "MAICA", 
