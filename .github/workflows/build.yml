@@ -1,0 +1,16 @@
+name: Package Application with Pyinstaller
+            
+on: push
+
+jobs:
+  pyinstaller-build:
+    runs-on: windows-latest
+    steps:
+      - name: Create Executable
+        uses: theSanguss/pyinstaller-action@patch-1
+        with:
+          python_ver: '3.9'
+          spec: 'maica/maica_starter.py'
+          requirements: 'requirements.txt'
+          upload_exe_with_name: 'MAICA'
+          options: --onefile, --name "MAICA", 
