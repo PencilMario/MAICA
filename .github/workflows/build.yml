@@ -10,7 +10,19 @@ jobs:
         uses: theSanguss/pyinstaller-action@patch-1
         with:
           python_ver: '3.11'
-          spec: 'maica/maica_starter.py'
+          spec: 'maica/maica_starter.spec'
           requirements: 'requirements.txt'
           upload_exe_with_name: 'MAICA'
           options: --onefile, --name "MAICA", 
+
+  pyinstaller-build2:
+    runs-on: windows-latest
+    steps:
+      - name: Create Executable
+        uses: theSanguss/pyinstaller-action@patch-1
+        with:
+          python_ver: '3.11'
+          spec: 'maica/create_account.py'
+          requirements: 'requirements.txt'
+          upload_exe_with_name: 'MAICA'
+          options: --onefile, --name "AccountAdder", 

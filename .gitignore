@@ -30,7 +30,7 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-*.spec
+!maica_starter.spec
 
 # Installer logs
 pip-log.txt
@@ -175,7 +175,9 @@ persistents/
 triggers/
 
 easter_egg.py
+!maica_hook.py
 test/
 .claude/settings.local.json
 CLAUDE.md
 .vscode/settings.json
+maica/pyvenv.cfg

@@ -4,7 +4,7 @@ from maica_utils import load_env
 self_path = os.path.dirname(os.path.abspath(__file__))
 mark_path = os.path.join(self_path, "../.initiated")
 curr_version, legc_version = load_env('VERSION_CONTROL').split(';', 1)
-
+print(f"initmark location: {mark_path}")
 def check_marking():
 
     try:
