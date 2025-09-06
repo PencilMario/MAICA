@@ -104,7 +104,7 @@ class FscPlain():
 class AsyncCreator():
     """Inherit this for async init."""
     async def _ainit(self):
-        pass
+        """Placeholder."""
 
     @classmethod
     async def async_create(cls, *args, **kwargs):
@@ -340,7 +340,8 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
         msg_print = msg_print.ljust(10)
         msg_print += f"[{time.strftime('%Y-%m-%d %H:%M:%S')}]" if add_time else ''; msg_print += f"-[{str(code)}]" if code else ''
         msg_print = msg_print.ljust(40)
-        msg_print += f": {str(info)}"; msg_print += f"; traceray ID {traceray_id}" if traceray_id else ''
+        msg_print += f": {str(info)}" if not str(info).startswith('\n') else f"{'-='*40}{str(info)}\n{'-='*60}"
+        msg_print += f"; traceray ID {traceray_id}" if traceray_id else ''
         msg_send = f"{str(info)}"
         if type == 'error' and load_env('NO_SEND_ERROR') == '1':
             msg_send = "A critical exception happened serverside, contact administrator"
@@ -349,7 +350,7 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
     if websocket:
         await websocket.send(wrap_ws_formatter(code=code, status=status, content=msg_send, type=type))
 
-    frametrack_dict = {"error": 5}
+    frametrack_dict = {"error": 99}
     if load_env("PRINT_VERBOSE") == "1":
         frametrack_dict['warn'] = 1
     if type in frametrack_dict:
