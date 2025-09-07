@@ -20,6 +20,14 @@ MFOCUS_ADDR = load_env('MFOCUS_ADDR')
 MFOCUS_KEY = load_env('MFOCUS_KEY')
 MFOCUS_CHOICE = load_env('MFOCUS_CHOICE')
 
+def test_logger(func):
+    async def wrapper(self, expression, values, *args, **kwargs):
+        print(f'Query: {expression}\nValues: {values}')
+        result = await func(self, expression, values, *args, **kwargs)
+        print(f'Result: {result}')
+        return result
+    return wrapper
+
 class DbPoolCoroutine(AsyncCreator):
     """Maintain a database connection pool so you don't have to."""
     def __init__(self, db, host, user, password, ro=False):
@@ -32,6 +40,7 @@ class DbPoolCoroutine(AsyncCreator):
         try:
             async with self.pool.acquire():
                 pass
+            return
         except Exception:
             await messenger(info=f"Recreating {self.db} pool since cannot acquire", type=MsgType.WARN)
             try:
@@ -40,9 +49,10 @@ class DbPoolCoroutine(AsyncCreator):
             except Exception:
                 raise MaicaDbError(f'Failure when trying reconnecting to {self.db}', '502', 'db_connection_failed')
 
+    # @test_logger
     async def query_get(self, expression, values=None, fetchall=False) -> list:
         results = None
-        for tries in range(0, 3):
+        for tries in range(3):
             try:
                 await self.keep_alive()
                 async with self.pool.acquire() as conn:
@@ -61,11 +71,12 @@ class DbPoolCoroutine(AsyncCreator):
                     raise MaicaDbError(f'DB connection failure after {str(tries + 1)} times', '502', 'db_connection_failed')
         return results
 
+    # @test_logger
     async def query_modify(self, expression, values=None, fetchall=False) -> int:
         if self.ro:
             raise MaicaDbError(f'DB marked as ro, no modify permitted', '511', 'db_modification_denied')
         lrid = None
-        for tries in range(0, 3):
+        for tries in range(3):
             try:
                 await self.keep_alive()
                 async with self.pool.acquire() as conn:
@@ -122,10 +133,11 @@ class SqliteDbPoolCoroutine(DbPoolCoroutine):
                 raise MaicaDbError(f'Failure when trying reconnecting to {self.db}', '502', 'db_connection_failed')
 
     @Decos.escape_sqlite_expression
+    # @test_logger
     async def query_get(self, expression, values=None, fetchall=False) -> list:
         """Execute SELECT query on SQLite database."""
         results = None
-        for tries in range(0, 3):
+        for tries in range(3):
             try:
                 await self.keep_alive()
                 if not values:
@@ -144,12 +156,13 @@ class SqliteDbPoolCoroutine(DbPoolCoroutine):
         return results
 
     @Decos.escape_sqlite_expression
+    # @test_logger
     async def query_modify(self, expression, values=None, fetchall=False) -> int:
         """Execute INSERT/UPDATE/DELETE query on SQLite database."""
         if self.ro:
             raise MaicaDbError(f'DB marked as ro, no modify permitted', '511', 'sqlite_modification_denied')
         lrid = None
-        for tries in range(0, 3):
+        for tries in range(3):
             try:
                 await self.keep_alive()
                 if not values:
@@ -224,7 +237,7 @@ class AiConnCoroutine(AsyncCreator):
                 "model": self.model_actual
             }
         )
-        for tries in range(0, 3):
+        for tries in range(3):
             try:
                 await self.keep_alive()
                 task_stream_resp = asyncio.create_task(self.socket.chat.completions.create(**kwargs))
