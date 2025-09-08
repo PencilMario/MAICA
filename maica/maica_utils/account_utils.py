@@ -24,10 +24,8 @@ MAICA_DB = load_env('MAICA_DB')
 encryptor = decryptor = verifier = signer = None
 
 def _get_keys() -> tuple[PKCS1_OAEP.PKCS1OAEP_Cipher, PKCS1_OAEP.PKCS1OAEP_Cipher, PSS_SigScheme, PSS_SigScheme]:
-    self_path = os.path.dirname(os.path.abspath(__file__))
-    key_path = os.path.join(self_path, "../../keys")
-    prv_path = os.path.join(key_path, "prv.key")
-    pub_path = os.path.join(key_path, "pub.key")
+    prv_path = get_outer_path('keys/prv.key')
+    pub_path = get_outer_path('keys/pub.key')
 
     with open(prv_path, "r") as privkey_file:
         privkey = privkey_file.read()
@@ -108,7 +106,7 @@ class AccountCursor(AsyncCreator):
         sql_expression = 'SELECT * FROM users WHERE email = %s' if is_email else 'SELECT * FROM users WHERE username = %s'
         try:
             result = await self.auth_pool.query_get(expression=sql_expression, values=(identity, ))
-            assert isinstance(result[0], int), "User does not exist"
+            assert result and isinstance(result[0], int), "User does not exist"
 
             dbres_id, dbres_username, dbres_nickname, dbres_email, dbres_ecf, dbres_pwd_bcrypt, *_ = result
             self.settings.identity.update(user_id=dbres_id, username=dbres_username, nickname=dbres_nickname, email=dbres_email)
