@@ -14,9 +14,12 @@ import traceback
 from typing import *
 from dotenv import load_dotenv as __load_dotenv
 from urllib.parse import urlparse
+from .locater import *
 """Import layer 1"""
 
 colorama.init(autoreset=True)
+
+__load_dotenv(dotenv_path=get_inner_path('.env'))
 
 class MsgType():
     """For convenience."""
@@ -411,7 +414,6 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
 
 def load_env(key) -> str:
     """Load something from .env."""
-    __load_dotenv()
     result = os.getenv(key)
     return result
 
