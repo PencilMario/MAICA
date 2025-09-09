@@ -10,10 +10,10 @@ jobs:
         uses: theSanguss/pyinstaller-action@patch-1
         with:
           python_ver: '3.11'
-          spec: 'maica_starter.py'
+          spec: 'maica/maica_starter.py'
           requirements: 'requirements.txt'
           upload_exe_with_name: 'MAICA'
-          options: --onefile, --name "MAICA", 
+          options: --onefile, --name "maica_starter", 
 
   local-account-adder:
     runs-on: windows-latest
