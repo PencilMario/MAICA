@@ -5,12 +5,15 @@ import logging
 import os
 from datetime import datetime
 
-def setup_logging(log_dir='logs', custom_log_path=None):
+def setup_logging(log_dir=None, custom_log_path=None, db_path='forum_flarum_db.db'):
     # Determine log directory
     if custom_log_path:
         log_dir = custom_log_path
-    
-    # Create logs directory if it doesn't exist
+    elif log_dir is None:
+        # Use the directory of the database file as the default log directory
+        log_dir = os.path.dirname(db_path) or '.'
+
+    # Create log directory if it doesn't exist
     os.makedirs(log_dir, exist_ok=True)
     
     # Generate a log filename with timestamp
@@ -29,7 +32,7 @@ def setup_logging(log_dir='logs', custom_log_path=None):
 
 def create_user(db_path, username, email, password, log_dir=None):
     # Setup logging
-    log_filename = setup_logging(custom_log_path=log_dir)
+    log_filename = setup_logging(custom_log_path=log_dir, db_path=db_path)
     logging.info(f"Logging initialized. Log file: {log_filename}")
     
     logging.info(f"Attempting to create user: {username} (email: {email})")
