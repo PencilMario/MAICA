@@ -248,7 +248,7 @@ class NoWsCoroutine(AsyncCreator):
         """Store ms cache with prompt hash."""
         self._check_essentials()
 
-        sql_expression_1 = "INSERT INTO ms_cache VALUES (NULL, %s, %s, %s)"
+        sql_expression_1 = "INSERT INTO ms_cache (user_id, hash, content) VALUES (%s, %s, %s)"
         spire_id = await self.maica_pool.query_modify(expression=sql_expression_1, values=(self.settings.verification.user_id, hash_identity, content))
         await messenger(None, 'maica_spire_cache_stored', 'Stored a cache for MSpire', '200')
         return spire_id
@@ -265,7 +265,7 @@ class NoWsCoroutine(AsyncCreator):
                     system_init = PROMPT_EC
                 else:
                     system_init = PROMPT_EW
-            system_init.format(player_name=player_name)
+            system_init = system_init.format(player_name=player_name)
             return system_init
 
         self._check_essentials()
@@ -733,7 +733,7 @@ async def main_logic(websocket, auth_pool, maica_pool, mcore_conn, mfocus_conn, 
     async with unique_lock:
         try:
             sentence_of_the_day = SentenceOfTheDay().get_sentence()
-            await messenger(websocket, 'maica_connection_initiated', sentence_of_the_day, '200', no_print=True)
+            await messenger(websocket, 'maica_connection_initiated', sentence_of_the_day, '200', type=MsgType.INFO, no_print=True)
 
             thread_instance = await WsCoroutine.async_create(websocket, auth_pool=auth_pool, maica_pool=maica_pool, mcore_conn=mcore_conn, mfocus_conn=mfocus_conn, online_dict=online_dict)
 

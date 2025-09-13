@@ -59,6 +59,8 @@ class CommonMaicaWarning(CommonMaicaException):
     """This is a common MAICA warning."""
     def __init__(self, message=None, error_code='400', status='maica_unidentified_warning', send=None, print=None):
         super().__init__(message, error_code, status, send, print)
+
+    @property
     def is_breaking(self):
         return False
 
@@ -229,6 +231,8 @@ def default(exp, default, default_list: list=[None]) -> any:
     return default if exp in default_list else exp
 
 def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) -> str:
+    if not isinstance(content, (str, list, dict, None)):
+        content = str(content)
     output = {
         "code" : code,
         "status" : status,
@@ -290,7 +294,7 @@ def alt_tools(tools: list) -> list:
 def maica_assert(condition, kwd='param'):
     """Normally used for input checkings."""
     if not condition:
-        raise MaicaInputError(f"Illegal input {kwd} detected", '405', 'maica_input_param_bad')
+        raise MaicaInputWarning(f"Illegal input {kwd} detected", '405', 'maica_input_param_bad')
 
 def proceed_agent_response(text: str, is_json=False) -> Union[str, list, dict]:
     """Proceeds thinking/nothinking."""

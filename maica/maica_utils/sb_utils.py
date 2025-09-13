@@ -11,6 +11,14 @@ class SideBoundCoroutine(AsyncCreator):
     FUNC_NAME = 'mfocus'
     EMPTY = {}
 
+    @staticmethod
+    def test_log_cache_stats(func):
+        async def wrapper(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            print(f'Cache expired: {result}')
+            return result
+        return wrapper
+
     def __init__(self, fsc: FullSocketsContainer) -> None:
         self.settings: MaicaSettings = fsc.maica_settings
         self.mfocus_conn: AiConnCoroutine = fsc.mfocus_conn
@@ -40,6 +48,7 @@ class SideBoundCoroutine(AsyncCreator):
         else:
             return self.settings.temp.chat_session
 
+    # @test_log_cache_stats
     async def _check_expired_or_not(self) -> bool:
         if self.p_id and self.timestamp and self.sf_content:
             sql_expression_1 = f'SELECT timestamp FROM {self.DB_NAME} WHERE {self.PRIM_KEY} = %s'
@@ -155,11 +164,7 @@ class SideFunctionCoroutine(AsyncCreator):
         completion_args = {
             "messages": self.serial_messages,
             "tools": self.tools,
-            "stop": ['Observation:'],
             "temperature": 0.2,
-            "top_p": 0.6,
-            "presence_penalty": 0.4,
-            "frequency_penalty": 0.5,
             "seed": 42
         }
 
