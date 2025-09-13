@@ -59,6 +59,8 @@ class CommonMaicaWarning(CommonMaicaException):
     """This is a common MAICA warning."""
     def __init__(self, message=None, error_code='400', status='maica_unidentified_warning', send=None, print=None):
         super().__init__(message, error_code, status, send, print)
+
+    @property
     def is_breaking(self):
         return False
 
@@ -115,6 +117,38 @@ class AsyncCreator():
         await instance._ainit()
         return instance
 
+class LimitedList(list):
+    """Might not have applied to all functionalities!"""
+    def __init__(self, max_size, *args, **kwargs):
+        self.max_size = max_size
+        super().__init__(*args, **kwargs)
+        
+        while len(self) > self.max_size:
+            self.pop(0)
+
+    @property
+    def list(self):
+        while len(self) > self.max_size:
+            self.pop(0)
+        return list(self)
+
+    def append(self, item):
+        if len(self) >= self.max_size:
+            self.pop(0)
+        super().append(item)
+    
+    def extend(self, iterable):
+        for item in iterable:
+            self.append(item)
+    
+    def insert(self, index, item):
+        if len(self) >= self.max_size:
+            self.pop(0)
+        super().insert(index, item)
+    
+    def __repr__(self):
+        return f"LimitedList(max_size={self.max_size}, {super().__repr__()})"
+    
 class LoginResult():
     """
     A packed login result.
@@ -229,6 +263,8 @@ def default(exp, default, default_list: list=[None]) -> any:
     return default if exp in default_list else exp
 
 def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) -> str:
+    if not isinstance(content, (str, list, dict, None)):
+        content = str(content)
     output = {
         "code" : code,
         "status" : status,
@@ -290,7 +326,7 @@ def alt_tools(tools: list) -> list:
 def maica_assert(condition, kwd='param'):
     """Normally used for input checkings."""
     if not condition:
-        raise MaicaInputError(f"Illegal input {kwd} detected", '405', 'maica_input_param_bad')
+        raise MaicaInputWarning(f"Illegal input {kwd} detected", '405', 'maica_input_param_bad')
 
 def proceed_agent_response(text: str, is_json=False) -> Union[str, list, dict]:
     """Proceeds thinking/nothinking."""

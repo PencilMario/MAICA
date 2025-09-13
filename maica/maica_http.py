@@ -23,7 +23,7 @@ from Crypto.Hash import SHA256
 from typing import *
 from maica_ws import NoWsCoroutine
 from maica_utils import *
-from nv_watcher import NvWatcher
+from mtools import NvWatcher
 
 MCORE_ADDR = load_env('MCORE_ADDR')
 MFOCUS_ADDR = load_env('MFOCUS_ADDR')
@@ -328,8 +328,10 @@ class ShortConnHandler(View):
 
     async def get_workload(self):
         """GET, val=False"""
-
-        content = [self.mcore_watcher.get_statics_inside(), self.mfocus_watcher.get_statics_inside()]
+        content = self.mcore_watcher.get_statics_inside()
+        content_2 = self.mfocus_watcher.get_statics_inside()
+        if isinstance(content_2, dict):
+            content.update(content_2)
 
         return jsonify({"success": True, "exception": None, "content": content})
     
@@ -403,13 +405,13 @@ async def prepare_thread(**kwargs):
 
         ShortConnHandler.mcore_watcher = await NvWatcher.async_create('mcore')
         ShortConnHandler.mfocus_watcher = await NvWatcher.async_create('mfocus')
-        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.main_watcher())
-        mfocus_task = asyncio.create_task(ShortConnHandler.mfocus_watcher.main_watcher())
+        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.wrapped_main_watcher())
+        mfocus_task = asyncio.create_task(ShortConnHandler.mfocus_watcher.wrapped_main_watcher())
 
     else:
 
         ShortConnHandler.mcore_watcher = await NvWatcher.async_create('mcore')
-        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.main_watcher())
+        mcore_task = asyncio.create_task(ShortConnHandler.mcore_watcher.wrapped_main_watcher())
         mfocus_task = None
 
     config = Config()

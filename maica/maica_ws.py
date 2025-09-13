@@ -8,7 +8,6 @@ import re
 import traceback
 import colorama
 import mtools
-import post_proc
 
 from typing import *
 from Crypto.Random import random as CRANDOM
@@ -44,7 +43,7 @@ class NoWsCoroutine(AsyncCreator):
         self.fsc = FullSocketsContainer(self.websocket, self.traceray_id, self.settings, self.auth_pool, self.maica_pool)
 
     async def _ainit(self):
-        self.hasher = await AccountCursor.async_create(self.fsc, self.auth_pool, self.maica_pool)
+        self.hasher = await AccountCursor.async_create(self.settings, self.auth_pool, self.maica_pool)
 
     def _check_essentials(self) -> None:
         if not self.settings.verification.user_id:
@@ -248,7 +247,7 @@ class NoWsCoroutine(AsyncCreator):
         """Store ms cache with prompt hash."""
         self._check_essentials()
 
-        sql_expression_1 = "INSERT INTO ms_cache VALUES (NULL, %s, %s, %s)"
+        sql_expression_1 = "INSERT INTO ms_cache (user_id, hash, content) VALUES (%s, %s, %s)"
         spire_id = await self.maica_pool.query_modify(expression=sql_expression_1, values=(self.settings.verification.user_id, hash_identity, content))
         await messenger(None, 'maica_spire_cache_stored', 'Stored a cache for MSpire', '200')
         return spire_id
@@ -265,7 +264,7 @@ class NoWsCoroutine(AsyncCreator):
                     system_init = PROMPT_EC
                 else:
                     system_init = PROMPT_EW
-            system_init.format(player_name=player_name)
+            system_init = system_init.format(player_name=player_name)
             return system_init
 
         self._check_essentials()
@@ -694,7 +693,7 @@ class WsCoroutine(NoWsCoroutine):
                 await messenger(None, 'maica_core_nostream_done', f'Reply sent with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
 
         # Can be post-processed here
-        reply_appended = post_proc.filter_format(reply_appended, self.settings.basic.target_lang)
+        reply_appended = mtools.post_proc(reply_appended, self.settings.basic.target_lang)
         reply_appended_insertion = {'role': 'assistant', 'content': reply_appended}
 
         # Trigger process
@@ -733,7 +732,7 @@ async def main_logic(websocket, auth_pool, maica_pool, mcore_conn, mfocus_conn, 
     async with unique_lock:
         try:
             sentence_of_the_day = SentenceOfTheDay().get_sentence()
-            await messenger(websocket, 'maica_connection_initiated', sentence_of_the_day, '200', no_print=True)
+            await messenger(websocket, 'maica_connection_initiated', sentence_of_the_day, '200', type=MsgType.INFO, no_print=True)
 
             thread_instance = await WsCoroutine.async_create(websocket, auth_pool=auth_pool, maica_pool=maica_pool, mcore_conn=mcore_conn, mfocus_conn=mfocus_conn, online_dict=online_dict)
 

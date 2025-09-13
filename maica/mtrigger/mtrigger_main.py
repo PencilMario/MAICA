@@ -171,7 +171,7 @@ class MTriggerCoroutine(SideFunctionCoroutine):
 
             # This is a little bit special
             self.serial_messages.extend([{'role': 'user', 'content': input}, {'role': 'assistant', 'content': output}])
-            user_instruct_input = '观察以上对话历史记录, 依据你上一次作出的回应调用工具. 每个工具最多调用一次.' if self.settings.basic.target_lang == 'zh' else 'Observe the chat history and make tool calls according to your last reply. Each tool can only be used once at most.'
+            user_instruct_input = '观察以上对话历史记录, 依据你上一次作出的回应调用工具. 除好感外, 不要调用未经用户明确指示的工具, 每个工具最多调用一次.' if self.settings.basic.target_lang == 'zh' else 'Observe the chat history and make tool calls according to your last reply. Do not use tools except affection, unless user requested directly. Each tool can only be used once at most.'
             await self._construct_query(user_input=user_instruct_input)
 
             cycle = 0; ending = False
@@ -182,7 +182,7 @@ class MTriggerCoroutine(SideFunctionCoroutine):
                 cycle += 1
 
                 resp_content, resp_tools = await self._send_query()
-                await messenger(self.websocket, 'maica_mtrigger_toolchain', f'\nMTrigger toolchain {cycle} round responded, response is:\n{resp_content}\nAnalyzing response...')
+                await messenger(self.websocket, 'maica_mtrigger_toolchain', f'\nMTrigger toolchain {cycle} round responded, response is:\n{resp_content}\nAnalyzing response...', code='200')
                 tool_seq = 0
                 if resp_tools:
                     for resp_tool in resp_tools:
@@ -190,7 +190,7 @@ class MTriggerCoroutine(SideFunctionCoroutine):
                         # Tool parallel support
                         tool_seq += 1; all_tool_count += 1
                         tool_id, tool_type, tool_func_name, tool_func_args = resp_tool.id, resp_tool.type, resp_tool.function.name, resp_tool.function.arguments
-                        await messenger(None, 'maica_mtrigger_tool_acquire', f'\nCalling parallel tool {tool_seq}/{len(resp_tools)}:\n{resp_tool}\nSending trigger...')
+                        await messenger(info=f'\nCalling parallel tool {tool_seq}/{len(resp_tools)}:\n{resp_tool}\nSending trigger...', type=MsgType.PRIM_LOG)
 
                         if tool_func_name == 'agent_finished':
                             ending = True
