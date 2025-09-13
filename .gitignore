@@ -183,3 +183,4 @@ test/
 CLAUDE.md
 .vscode/settings.json
 maica/pyvenv.cfg
+maica_starter.spec
