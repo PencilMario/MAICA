@@ -5,6 +5,7 @@ import common_schedule
 from maica_utils import *
 from initializer import *
 
+
 def check_init():
     if not check_marking():
         generate_rsa_keys()
