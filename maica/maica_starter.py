@@ -1,9 +1,30 @@
+import os
+import sys
+from pathlib import Path
+try:
+    from maica import maica_ws
+except Exception:
+    current_dir = Path(__file__).parent
+    parent_dir = current_dir.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+
 import asyncio
-import maica_ws
-import maica_http
-import common_schedule
-from maica_utils import *
-from initializer import *
+
+from maica import maica_ws, maica_http, common_schedule
+from maica.maica_utils import *
+from maica.initializer import *
+
+def check_basic_init():
+    if load_env('IS_REAL_ENV') != '0':
+        return
+    else:
+        print('''No env detected, is this workflow?
+If it is, at least the imports and grammar are good if you see this.
+If not, please follow the documents and finish configures before running.
+Quitting...'''
+              )
+        quit(0)
 
 
 def check_init():
@@ -41,6 +62,10 @@ async def start_all():
     await asyncio.gather(auth_pool.close(), maica_pool.close(), return_exceptions=True)
     quit()
 
-if __name__ == "__main__":
+def full_start():
+    check_basic_init()
     check_init()
     asyncio.run(start_all())
+
+if __name__ == "__main__":
+    full_start()
