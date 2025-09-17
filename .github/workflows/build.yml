@@ -9,7 +9,7 @@ jobs:
       - name: Create Executable
         uses: theSanguss/pyinstaller-action@patch-1
         with:
-          python_ver: '3.11'
+          python_ver: '3.12'
           spec: 'maica/maica_starter.py'
           requirements: 'requirements.txt'
           upload_exe_with_name: 'MAICA'
