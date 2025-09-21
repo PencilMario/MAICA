@@ -29,7 +29,7 @@ def pkg_init_maica():
 colorama.init(autoreset=True)
 initialized = False
 
-def check_params(envdir=None, silent=False, **kwargs):
+def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwargs):
     """This will only run once. Recalling will not take effect, except passing in extra kwargs."""
     global initialized
 
@@ -49,25 +49,26 @@ def check_params(envdir=None, silent=False, **kwargs):
     envdir = envdir or args.envdir
     templates = args.templates
 
-    def dest_env(envdir):
-        if envdir:
-            realpath = os.path.abspath(envdir)
-            if not os.path.isfile(realpath):
-                printer(info=f'envdir {realpath} is not a file, trying {os.path.join(realpath, ".env")}...', type=MsgType.WARN)
-                realpath = os.path.join(realpath, '.env')
-                if not os.path.isfile(realpath):
-                    raise Exception('designated env file not exist')
+    def dest_env(envdir, extra_envdir):
+        if not envdir:
+            realpath = get_inner_path('.env')
+            printer(info=f'No env file designated, defaulting to {realpath}...', type=MsgType.DEBUG)
+            envdir = realpath
+
+        realpath = os.path.abspath(envdir)
+        if os.path.isfile(realpath):
             printer(info=f'Loading env file {realpath}...', type=MsgType.DEBUG)
             load_dotenv(dotenv_path=realpath)
-
         else:
-            realpath = get_inner_path('.env')
-            printer(info=f'No env file designated, trying to load {realpath}...', type=MsgType.DEBUG)
-            if os.path.isfile(realpath):
-                load_dotenv(dotenv_path=realpath)
-            else:
-                printer(info=f'{realpath} is not a file, skipping real env file...', type=MsgType.WARN)
-        
+            printer(info=f'{realpath} is not a file, skipping real env file...', type=MsgType.WARN)
+
+        if extra_envdir:
+            for edir in extra_envdir:
+                realpath = os.path.abspath(edir)
+                if os.path.isfile(realpath):
+                    printer(info=f'Loading extra env file {realpath}...', type=MsgType.DEBUG)
+                    load_dotenv(dotenv_path=realpath)
+
         realpath = get_inner_path('env_example')
         printer(info=f'Loading env example {realpath} to guarantee basic functions...', type=MsgType.DEBUG)
         if os.path.isfile(realpath):
@@ -117,7 +118,7 @@ def check_params(envdir=None, silent=False, **kwargs):
         try:
             if templates:
                 print_templates() if templates == 'print' else create_templates()
-            dest_env(envdir)
+            dest_env(envdir, extra_envdir)
             pkg_init_maica()
             initialized = True
         except Exception as e:
