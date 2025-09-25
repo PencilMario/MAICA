@@ -17,6 +17,7 @@ from .locater import *
 """Import layer 1"""
 
 colorama.init(autoreset=True)
+_silent = False
 
 class MsgType():
     """For convenience."""
@@ -310,7 +311,7 @@ async def sleep_forever() -> None:
 
 def alt_tools(tools: list) -> list:
     """If ALT_TOOLCALL"""
-    match load_env('ALT_TOOLCALL'):
+    match load_env('MAICA_ALT_TOOLCALL'):
         case '0':
             return tools
         case '1':
@@ -360,7 +361,7 @@ async def messenger(websocket=None, status='', info='', code='0', traceray_id=''
 async def messenger(websocket=None, *args, **kwargs) -> None:
     """Together with websocket.send()."""
     ws_tuple = sync_messenger(*args, **kwargs)
-    if websocket:
+    if websocket and ws_tuple:
         await websocket.send(wrap_ws_formatter(*ws_tuple))
 
 def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaException]=None, prefix='', type='', color='', add_time=True, no_print=False, no_raise=False) -> list:
@@ -374,7 +375,7 @@ def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional
 
     if error:
         status = error.status if not status else status; info = error.message if not info else info; code = error.error_code if code == "0" else code
-        websocket = websocket if not error.send is False else None; no_print = False if not error.print is False else True
+        no_print = False if not error.print is False else True
 
     if not type:
         match int(code):
@@ -411,19 +412,19 @@ def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional
         msg_print += f": {str(info)}" if not str(info).startswith('\n') else f"{'-=' * rep1}{str(info)}\n{'-=' * rep2}"
         msg_print += f"; traceray ID {traceray_id}" if traceray_id else ''
         msg_send = info
-        if type == 'error' and load_env('NO_SEND_ERROR') == '1':
+        if type == 'error' and load_env('MAICA_NO_SEND_ERROR') == '1':
             msg_send = "A critical exception happened serverside, contact administrator"
         if traceray_id and isinstance(info, str):
             msg_send += f" -- your traceray ID is {traceray_id}"
 
     frametrack_dict = {"error": 99}
-    if not load_env("PRINT_VERBOSE") == "0":
+    if not load_env('MAICA_PRINT_VERBOSE') == "0":
         frametrack_dict['warn'] = 0
     if type in frametrack_dict:
         stack = inspect.stack()
         stack.pop(0)
 
-    if not no_print:
+    if (not no_print) and (not _silent):
         match type:
             case "plain":
                 print((color or '') + msg_print, end='')
@@ -433,7 +434,7 @@ def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional
                 else:
                     print((color or colorama.Fore.LIGHTGREEN_EX) + msg_print)
             case "debug":
-                if not load_env("PRINT_VERBOSE") == "0":
+                if not load_env('MAICA_PRINT_VERBOSE') == "0":
                     print((color or colorama.Fore.LIGHTBLACK_EX) + msg_print)
             case "info":
                 print((color or colorama.Fore.GREEN) + msg_print)
@@ -461,6 +462,8 @@ def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional
                 print((color or colorama.Fore.LIGHTRED_EX) + msg_print)
     if error and not no_raise:
         raise error
+    if error and not error.send:
+        return
     return code, status, msg_send, type
 
 def load_env(key) -> str:
@@ -484,7 +487,7 @@ async def get_json(url) -> json:
     try:
         for tries in range(0, 3):
             try:
-                client = httpx.AsyncClient(proxy=load_env("PROXY_ADDR"))
+                client = httpx.AsyncClient(proxy=load_env('MAICA_PROXY_ADDR'))
                 res = (await client.get(url, headers=headers)).json()
                 break
             except Exception as e:
