@@ -3,8 +3,14 @@ name: Package Application with Pyinstaller
 on: push
 
 jobs:
-  MAICA-main-exe:
-    runs-on: windows-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: win
+            runs-on: windows-latest
+
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v3
 
@@ -17,11 +23,6 @@ jobs:
           upload_exe_with_name: 'MAICA'
           options: --onefile, --name "maica_starter",
 
-  local-account-adder:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-
       - name: Create Executable for Register
         uses: theSanguss/pyinstaller-action@patch-1
         with:
@@ -31,31 +32,26 @@ jobs:
           upload_exe_with_name: 'Register'
           options: --onefile, --name "Register",
 
-  release:
-    needs: [MAICA-main-exe, local-account-adder]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+      - name: Create Release Tag
+        id: create_tag
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          tag_name="v$(date +'%Y%m%d')-${{ github.sha }}"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag "$tag_name"
+          git push origin "$tag_name"
+          echo "tag=$tag_name" >> $GITHUB_OUTPUT
 
-      - name: Download MAICA Executable
-        uses: actions/download-artifact@v4
-        with:
-          name: MAICA
-          path: dist/
-
-      - name: Download Register Executable
-        uses: actions/download-artifact@v4
-        with:
-          name: Register
-          path: dist/
-
-      - name: Copy env_example
-        run: cp maica/env_example dist/
-
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main' && matrix.platform == 'win'
         with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
           files: |
             dist/maica_starter.exe
             dist/Register.exe
-            dist/env_example
+            maica/env_example
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
