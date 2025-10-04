@@ -1,9 +1,6 @@
 name: Package Application with Pyinstaller
 
-on:
-  push:
-    tags:
-      - 'v*'
+on: push
 
 jobs:
   MAICA-main-exe:
