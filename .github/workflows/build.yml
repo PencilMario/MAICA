@@ -50,7 +50,7 @@ jobs:
         with:
           tag_name: ${{ steps.create_tag.outputs.tag }}
           files: |
-            maica_starter.exe
+            (?i)^(?:.*[\\/])?maica_starter\.exe$
             dist/Register.exe
             maica/env_example
         env:
