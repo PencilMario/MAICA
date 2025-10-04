@@ -23,14 +23,14 @@ jobs:
           upload_exe_with_name: 'maica_starter'
           options: --onefile, --name "maica_starter",
 
-      - name: Create Executable for Register
-        uses: theSanguss/pyinstaller-action@patch-1
-        with:
-          python_ver: '3.11'
-          spec: 'maica/create_account.py'
-          requirements: 'requirements_2.txt'
-          upload_exe_with_name: 'Register'
-          options: --onefile, --name "Register",
+      #- name: Create Executable for Register
+      #  uses: theSanguss/pyinstaller-action@patch-1
+      #  with:
+      #    python_ver: '3.11'
+      #    spec: 'maica/create_account.py'
+      #    requirements: 'requirements_2.txt'
+      #    upload_exe_with_name: 'Register'
+      #    options: --onefile, --name "Register",
 
       - name: Create Release Tag
         id: create_tag
