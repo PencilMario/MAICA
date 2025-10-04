@@ -38,13 +38,13 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Download MAICA Executable
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: MAICA
           path: dist/
 
       - name: Download Register Executable
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: Register
           path: dist/
