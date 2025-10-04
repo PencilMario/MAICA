@@ -49,9 +49,30 @@ jobs:
         if: github.ref == 'refs/heads/main' && matrix.platform == 'win'
         with:
           tag_name: ${{ steps.create_tag.outputs.tag }}
+      - name: Debug Executable Location
+        shell: bash
+        run: |
+          pwd
+          ls
+          find . -name "maica_starter.exe"
+          find . -name "Register.exe"
+
+      - name: Prepare Release Files
+        shell: bash
+        run: |
+          mkdir -p release
+          find . -name "maica_starter.exe" -exec cp {} release/maica_starter.exe \;
+          find . -name "Register.exe" -exec cp {} release/Register.exe \;
+          cp maica/env_example release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main' && matrix.platform == 'win'
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
           files: |
-            dist/maica_starter.exe
-            dist/Register.exe
-            maica/env_example
+            release/maica_starter.exe
+            release/Register.exe
+            release/env_example
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
