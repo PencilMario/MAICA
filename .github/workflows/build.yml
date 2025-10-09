@@ -37,7 +37,7 @@ jobs:
         if: matrix.platform == 'win'
         shell: bash
         run: |
-          version=$(grep 'MAICA_CURR_VERSION' maica/env_example | cut -d "'" -f 2)
+          version=$(grep 'MAICA_CURR_VERSION' maica/env_basis | cut -d "'" -f 2)
           tag_name="v$version"
 
           # Check if tag already exists
@@ -97,6 +97,6 @@ jobs:
           tag_name: ${{ steps.create_tag.outputs.tag }}
           files: |
             dist/*
-            maica/env_example
+            maica/env_basis
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
