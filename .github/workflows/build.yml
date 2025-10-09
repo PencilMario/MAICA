@@ -1,6 +1,13 @@
 name: Package Application with Pyinstaller
 
-on: push
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual workflow dispatch'
+        required: false
+        type: string
 
 jobs:
   build:
