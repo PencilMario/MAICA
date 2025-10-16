@@ -11,6 +11,7 @@ from .maica_utils import (
     MaicaDbError,
     MaicaPermissionWarning,
     MaicaInputWarning,
+    MaicaDbWarning,
     MaicaConnectionWarning,
     MaicaInternetWarning,
     FscPlain,
@@ -21,7 +22,6 @@ from .maica_utils import (
     default,
     wrap_ws_formatter,
     ellipsis_str,
-    fuzzy_match,
     mstuff_words_upper,
     sleep_forever,
     alt_tools,
@@ -49,9 +49,9 @@ from .maica_utils import (
     Decos,
     Desc,
 )
-from .connection_utils import DbPoolCoroutine, SqliteDbPoolCoroutine, ConnUtils, AiConnCoroutine, validate_input
+from .connection_utils import DbPoolCoroutine, SqliteDbPoolCoroutine, ConnUtils, AiConnCoroutine, validate_input, apply_postfix
 from .setting_utils import MaicaSettings
-from .account_utils import AccountCursor, encrypt_token, sign_message, verify_message, sort_message
+from .account_utils import AccountCursor, encrypt_token, sign_message, verify_message
 from .container_utils import FullSocketsContainer
 from .sb_utils import SideBoundCoroutine, SideFunctionCoroutine
 from .get_a_sentence import SentenceOfTheDay
@@ -69,6 +69,7 @@ __all__ = [
     'MaicaDbError',
     'MaicaPermissionWarning',
     'MaicaInputWarning',
+    'MaicaDbWarning',
     'MaicaConnectionWarning',
     'MaicaInternetWarning',
     'FscPlain',
@@ -80,7 +81,6 @@ __all__ = [
     'default',
     'wrap_ws_formatter',
     'ellipsis_str',
-    'fuzzy_match',
     'mstuff_words_upper',
     'sleep_forever',
     'alt_tools',
@@ -91,6 +91,7 @@ __all__ = [
     'sync_messenger',
     'messenger',
     'validate_input',
+    'apply_postfix',
     'load_env',
     'wrap_run_in_exc',
     'limit_length',
@@ -119,7 +120,6 @@ __all__ = [
     'encrypt_token',
     'sign_message',
     'verify_message',
-    'sort_message',
     'SentenceOfTheDay',
     'locater',
     'get_inner_path',

@@ -676,6 +676,12 @@ class SfBoundCoroutine(SideBoundCoroutine):
                 ])
             if extra >= 1:
                 data_ex.extend([
+                    '纱世里是心跳文学部的副部长.',
+                    '纱世里平常表现阳光活泼, 但患有抑郁症.',
+                    '夏树是心跳文学部的部员.',
+                    '夏树性格傲娇, 有时又显得可爱.',
+                    '优里是心跳文学部的部员.',
+                    '优里性格内向, 往往显得成熟优雅.',
                 ])
                 if include_basic:
                     data_ex.extend([
@@ -689,12 +695,6 @@ class SfBoundCoroutine(SideBoundCoroutine):
                         '莫妮卡喜欢音乐会.',
                         '莫妮卡喜欢小裙子和蝴蝶结.',
                         '莫妮卡善于关怀和安慰, 在[player]低沉时希望他振作起来.',
-                        '纱世里是心跳文学部的副部长.',
-                        '纱世里平常表现阳光活泼, 但患有抑郁症.',
-                        '夏树是心跳文学部的部员.',
-                        '夏树性格傲娇, 有时又显得可爱.',
-                        '优里是心跳文学部的部员.',
-                        '优里性格内向, 往往显得成熟优雅.',
                     ])
             if extra >= 2:
                 data_ex.extend([
@@ -738,6 +738,12 @@ class SfBoundCoroutine(SideBoundCoroutine):
                 ])
             if extra >= 1:
                 data_ex.extend([
+                    'Sayori is the vice president of the literature club.',
+                    'Sayori usually appears outgoing and positive, but she has depression.',
+                    'Natsuki is member of the literature club.',
+                    'Natsuki is tsundere, appears cute sometimes.',
+                    'Yuri is member of the literature club.',
+                    'Yuri is introvert, usually appears mature and elegant.',
                 ])
                 if include_basic:
                     data_ex.extend([
@@ -751,12 +757,6 @@ class SfBoundCoroutine(SideBoundCoroutine):
                         "Monika likes concerts.",
                         "Monika likes skirts and ribbons.",
                         "Monika is caring and comforting. She wants [player] to be happy and cheered up.",
-                        'Sayori is the vice president of the literature club.',
-                        'Sayori usually appears outgoing and positive, but she has depression.',
-                        'Natsuki is member of the literature club.',
-                        'Natsuki is tsundere, appears cute sometimes.',
-                        'Yuri is member of the literature club.',
-                        'Yuri is introvert, usually appears mature and elegant.',
                     ])
             if extra >= 2:
                 data_ex.extend([
@@ -812,16 +812,21 @@ Keep your thinking as short as possible, so do not enumerate or repeat the infor
 Begin!"""
         messages = [{'role': 'system', 'content': system_init}]
         messages.append({'role': 'user', 'content': f'question: {query}; information: {information}'})
+        messages = apply_postfix(messages, thinking=False)
         completion_args = {
             "messages": messages,
         }
 
         resp = await self.mfocus_conn.make_completion(**completion_args)
-        response = resp.choices[0].message.content
-                
-        await messenger(None, 'mfocus_sfe_search', f"\nMFocus sfe searching persistent, response is:\n{response}\nEnd of MFocus sfe searching persistent", '201')
+        resp_content, resp_reasoning = resp.choices[0].message.content, getattr(resp.choices[0].message, 'reasoning_content')
+        resp_content, resp_reasoning = clean_text(resp_content), clean_text(resp_reasoning)
+        if not has_valid_content(resp_content):
+            resp_content = None
+        if not has_valid_content(resp_reasoning):
+            resp_reasoning = None
+        await messenger(None, 'mfocus_sfe_search', f"\nMFocus sfe searching persistent, response is:\nR: {resp_reasoning}\nA: {resp_content}\nEnd of MFocus sfe searching persistent", '201')
         
-        answer_fin_json = proceed_agent_response(response, is_json=True)
+        answer_fin_json = proceed_agent_response(resp_content, is_json=True)
         return answer_fin_json
 
     @Decos.report_data_error

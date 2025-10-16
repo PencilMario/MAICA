@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from typing import *
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,11 +26,13 @@ from maica import maica_ws, maica_http, common_schedule, silent as _silent
 from maica.maica_utils import *
 from maica.initializer import *
 
+from maica.initializer import pkg_init_initializer
 from maica.maica_http import pkg_init_maica_http
 from maica.maica_nows import pkg_init_maica_nows
 from maica.maica_utils import pkg_init_maica_utils
 from maica.mtools import pkg_init_mtools
 def pkg_init_maica():
+    pkg_init_initializer()
     pkg_init_maica_http()
     pkg_init_maica_nows()
     pkg_init_maica_utils()
@@ -68,6 +71,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
     _silent(silent)
 
     def dest_env(envdir: str=None, extra_envdir: list=None):
+        """This part we load all static env vars."""
         if not envdir:
             realpath = get_inner_path('.env')
             sync_messenger(info=f'[maica-env] No env file designated, defaulting to {realpath}...', type=MsgType.DEBUG)
@@ -108,7 +112,13 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
 
     def get_templates():
         with open(get_inner_path('env_basis'), 'r', encoding='utf-8') as env_e:
-            env_c = env_e.read()
+            env_c = env_e.readlines()
+        i = 0
+        for l in env_c:
+            i += 1
+            if len(l) <= 5:
+                break
+        env_c = ''.join(env_c[i:])
         return env_c
     
     def separate_line(title: str):
@@ -144,6 +154,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
         sync_messenger(info='[maica-cli] Creation succeeded, edit them yourself and then start with "maica -c .env"', type=MsgType.LOG)
 
     if kwargs:
+        # Load extra env vars
         for k, v in kwargs.items():
             os.environ[k] = v
         sync_messenger(info=f'[maica-env] Added {len(kwargs)} vars to environ.', type=MsgType.DEBUG)
@@ -177,35 +188,36 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
                         sync_messenger(info='\n[maica-cli] Function yet not supported, do it manually.\nNever ask why we made this.', type=MsgType.LOG)
                 exit()
 
-            pkg_init_maica()
             initialized = True
         except Exception as e:
             sync_messenger(info=f'[maica-init] Error: {str(e)}, quitting...', type=MsgType.ERROR)
             exit(1)
 
-def check_env_init():
-    """We run this only if called to serve. No env is basically not a problem for working as module."""
-    if load_env('MAICA_IS_REAL_ENV') == '1':
-        return
-    else:
-        print('''No real env detected, is this workflow?
+def check_data_init():
+    last_version = check_marking()
+    if not last_version:
+        generate_rsa_keys()
+        pkg_init_maica()
+        if load_env('MAICA_IS_REAL_ENV') == '1':
+            asyncio.run(create_tables())
+        else:
+            print('''No real env detected, is this workflow?
 If it is, at least the imports and grammar are good if you see this.
 If not:
     If you're running MAICA for deployment, pass in "--envdir path/to/.env".
     If you're developing with MAICA as dependency, call maica.init() after import.
     Or, you can manually set the necessary env vars.
 Quitting...'''
-              )
-        quit(0)
-
-def check_data_init():
-    if not check_marking():
-        generate_rsa_keys()
-        asyncio.run(create_tables())
+                )
+            quit(0)
         create_marking()
         sync_messenger(info="MAICA Illuminator initialization finished", type=MsgType.PRIM_SYS)
     else:
+        pkg_init_maica()
         sync_messenger(info="Initiated marking detected, skipping initialization", type=MsgType.DEBUG)
+    migrated = migrate(last_version)
+    if migrated:
+        create_marking()
 
 def check_warns():
     if load_env('MAICA_DB_ADDR') == 'sqlite':
@@ -271,7 +283,6 @@ async def mtts_start_all(auth_pool, maica_pool):
 
 def full_start():
     check_params()
-    check_env_init()
     check_data_init()
     check_warns()
     asyncio.run(start_all(start_target))
