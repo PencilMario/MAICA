@@ -79,8 +79,10 @@ class WsCoroutine(NoWsCoroutine):
         await messenger(websocket, "maica_connection_established", "MAICA connection established", "201", type=MsgType.INFO, no_print=True)
         await messenger(websocket, "maica_provider_anno", f"Current service provider is {G.A.DEV_IDENTITY or 'UNKNOWN'}", "200", type=MsgType.INFO, no_print=True)
         await messenger(websocket, "maica_model_anno", f"Main model is {self.fsc.mcore_conn.model_actual}, MFocus model is {self.fsc.mfocus_conn.model_actual}", "200", type=MsgType.INFO, no_print=True)
-        await messenger(websocket, "maica_model_mvista", f"MVista enabled on server, model is {self.fsc.mvista_conn.model_actual}", "200", type=MsgType.INFO, no_print=True)
-        await messenger(websocket, "maica_model_mnerve", f"MNerve enabled on server, model is {self.fsc.mnerve_conn.model_actual}", "200", type=MsgType.INFO, no_print=True)
+        if self.fsc.mvista_conn:
+            await messenger(websocket, "maica_model_mvista", f"MVista enabled on server, model is {self.fsc.mvista_conn.model_actual}", "200", type=MsgType.INFO, no_print=True)
+        if self.fsc.mnerve_conn:
+            await messenger(websocket, "maica_model_mnerve", f"MNerve enabled on server, model is {self.fsc.mnerve_conn.model_actual}", "200", type=MsgType.INFO, no_print=True)
 
         # Starting loop from here
         while True:
@@ -290,6 +292,9 @@ class WsCoroutine(NoWsCoroutine):
                 elif session_type == 0:
                     messages = [{'role': 'system', 'content': prompt}, messages0]
 
+            case _:
+                raise MaicaInputError("Using an out of bound session")
+
         # Construction part done, communication part started
 
         completion_args = {
@@ -302,11 +307,9 @@ class WsCoroutine(NoWsCoroutine):
             completion_args.update(dict(self.settings.super))
         else:
             completion_args.update(self.settings.super.default())
-            self.settings.temp.update(bypass_sup=False)
 
         if self.settings.temp.bypass_stream:
             completion_args['stream'] = False
-            self.settings.temp.update(bypass_stream=False)
 
         if self.settings.temp.ic_prep:
             completion_args['presence_penalty'] = 1.0 - (1.0 - completion_args['presence_penalty']) * (2/3)
@@ -340,11 +343,11 @@ class WsCoroutine(NoWsCoroutine):
                         reply_appended += token
                         seq += 1
                 await messenger(info='\n', type=MsgType.PLAIN)
-                await messenger(websocket, 'maica_core_streaming_done', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', traceray_id=self.traceray_id)
+                await messenger(websocket, 'maica_core_complete', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', traceray_id=self.traceray_id)
             else:
                 reply_appended = resp.choices[0].message.content
                 await messenger(websocket, 'maica_core_nostream_reply', reply_appended, '200', type=MsgType.CARRIAGE)
-                await messenger(None, 'maica_core_nostream_done', f'Reply sent with seed {completion_args['seed']} for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+                await messenger(None, 'maica_core_complete', f'Reply sent with seed {completion_args['seed']} for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
 
         else:
 
@@ -352,23 +355,29 @@ class WsCoroutine(NoWsCoroutine):
             reply_appended = replace_generation
             if completion_args['stream']:
                 await messenger(websocket, 'maica_core_streaming_continue', reply_appended, '100'); await messenger(info='\n', type=MsgType.PLAIN)
-                await messenger(websocket, 'maica_core_streaming_done', f'Streaming finished with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+                await messenger(websocket, 'maica_core_complete', f'Streaming finished with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
             else:
                 await messenger(websocket, 'maica_core_nostream_reply', reply_appended, '200', type=MsgType.CARRIAGE)
-                await messenger(None, 'maica_core_nostream_done', f'Reply sent with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+                await messenger(None, 'maica_core_complete', f'Reply sent with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
 
         # Can be post-processed here
         reply_appended = mtools.post_proc(reply_appended, self.settings.basic.target_lang)
         reply_appended_insertion = {'role': 'assistant', 'content': reply_appended}
 
         # Trigger process
+        # We should start post processes simultaneously
+        post_coros = []
+
+        if len(messages) >= 3 * 2 + 1 and self.settings.extra.dscl_pvn:
+            post_coros.append(mtools.ws_dscl_detect(messages[-2:], self.fsc))
+
         if self.settings.basic.enable_mt and not self.settings.temp.bypass_mt:
-            await self.mtrigger_coro.triggering(query_in, reply_appended)
-        else:
-            self.settings.temp.update(bypass_mt=False)
+            post_coros.append(self.mtrigger_coro.triggering(query_in, reply_appended))
 
         if self.settings.temp.ms_cache and not self.settings.temp.bypass_gen and not replace_generation:
-            await self.store_ms_cache(ms_cache_identity, reply_appended)
+            post_coros.append(self.store_ms_cache(ms_cache_identity, reply_appended))
+
+        await asyncio.gather(*post_coros)
 
         # Store history here
         if session_type == 1:
