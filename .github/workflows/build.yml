@@ -1,0 +1,109 @@
+name: Package Application with Pyinstaller
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual workflow dispatch'
+        required: false
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: win
+            runs-on: windows-latest
+
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create Executable for MAICA
+        uses: theSanguss/pyinstaller-action@patch-1
+        with:
+          python_ver: '3.12'
+          spec: 'maica/maica_starter.py'
+          requirements: 'requirements.txt'
+          upload_exe_with_name: 'MAICA'
+          options: --onefile, --name "maica_starter",
+
+      - name: Create Executable for Register
+        uses: theSanguss/pyinstaller-action@patch-1
+        with:
+          python_ver: '3.11'
+          spec: 'maica/create_account.py'
+          requirements: 'requirements_2.txt'
+          upload_exe_with_name: 'Register'
+          options: --onefile, --name "Register",
+
+      - name: Create Release Tag
+        id: create_tag
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          version=$(grep 'MAICA_CURR_VERSION' maica/env_basis | cut -d "'" -f 2)
+          tag_name="v$version"
+
+          # Check if tag already exists
+          if git rev-parse "$tag_name" >/dev/null 2>&1; then
+            echo "Tag $tag_name already exists. Skipping tag creation."
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+          else
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            git tag "$tag_name"
+            git push origin "$tag_name"
+            echo "tag=$tag_name" >> $GITHUB_OUTPUT
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: List Available Artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId
+            })
+            console.log(JSON.stringify(artifacts.data.artifacts, null, 2))
+
+      - name: Download MAICA Executable
+        uses: actions/download-artifact@v4
+        with:
+          name: MAICA
+          path: artifacts/
+
+      - name: Download Register Executable
+        uses: actions/download-artifact@v4
+        with:
+          name: Register
+          path: artifacts/
+
+      - name: Debug Artifact Contents
+        shell: bash
+        run: |
+          pwd
+          ls -la artifacts/
+          file artifacts/*
+
+      - name: Prepare Release Files
+        shell: bash
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main' && matrix.platform == 'win' && steps.create_tag.outputs.tag_exists == 'false'
+        with:
+          tag_name: ${{ steps.create_tag.outputs.tag }}
+          files: |
+            dist/*
+            maica/env_basis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
