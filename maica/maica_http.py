@@ -16,7 +16,7 @@ from typing import *
 
 from maica.maica_ws import NoWsCoroutine
 from maica.maica_utils import *
-from maica.mtools import emo_proc, zlist, elist, weather_api_get, NvWatcher, ProcessingImg
+from maica.mtools import *
 
 _CONNS_LIST = ['auth_pool', 'maica_pool', 'mnerve_conn']
 _WATCHES_DICT = {
@@ -137,7 +137,7 @@ class ShortConnHandler(View):
                 if result_json:
                     d = {"success": result_json.get('success'), "exception": result_json.get('exception')}
                     if "content" in result_json:
-                        d["content"] = ellipsis_str(result_json.get('content'), limit=70)
+                        d["content"] = ellipsis_str(result_json.get('content'), limit=65)
                     self.msg_http(info=f'Return value: {str(d)}', type=MsgType.SYS)
                 else:
                     self.msg_http(info='A non-json response has been made', type=MsgType.SYS)
@@ -148,14 +148,14 @@ class ShortConnHandler(View):
             if ce.is_critical:
                 traceback.print_exc()
             await messenger(error=ce, no_raise=True)
-            return jsonify({"success": False, "exception": str(ce)})
+            return jsonify({"success": False, "exception": str(ce)}), int(ce.error_code) or 400
 
         except Exception as e:
             await messenger(info=f'Handler hit an exception: {str(e)}', type=MsgType.WARN)
-            return jsonify({"success": False, "exception": str(e)})
+            return jsonify({"success": False, "exception": str(e)}), 400
 
     async def validate_http(self, raw_data: Union[str, dict], must: Optional[list]=None) -> dict:
-        must = must if must else []
+        must = must or []
         data_json = await validate_input(raw_data, 100000, None, must=must)
         if self.val and 'access_token' in must:
             access_token = data_json.get('access_token')
@@ -411,9 +411,9 @@ class ShortConnHandler(View):
         emo = content.get('text')
         
         if proc_type == 'norm':
-            result = emo_proc(emo, proc_lang)
+            result = await emo_proc_auto(emo, proc_lang, self.fsc.mnerve_conn)
         else:
-            raise NotImplementedError("add is not implemented")
+            result = await emo_proc_llm(emo, proc_lang, self.fsc.mnerve_conn)
 
         return self.jfy_res(result)
 
@@ -465,7 +465,7 @@ class ShortConnHandler(View):
                 return self.jfy_res(result)
             except Exception as e2:
                 if isinstance(valid_data, dict) and valid_data.get('content'):
-                    raise e
+                    raise MaicaInputWarning(f"File {valid_data.get('content')}.jpg not exist", '404') from e
                 else:
                     raise e2
 

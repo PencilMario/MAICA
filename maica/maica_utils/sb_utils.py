@@ -6,7 +6,7 @@ from .connection_utils import *
 from .fsc_late import *
 from maica.maica_utils import *
 
-class SideBoundCoroutine(AsyncCreator):
+class PersistentManager(AsyncCreator):
     """This is just a template. Do not initialize!"""
     DB_NAME = 'persistents'
     PRIM_KEY = 'persistent_id'
@@ -26,7 +26,8 @@ class SideBoundCoroutine(AsyncCreator):
 
     def __init__(self, fsc: FullSocketsContainer) -> None:
         self.settings: MaicaSettings = fsc.maica_settings
-        self.mfocus_conn: AiConnCoroutine = fsc.mfocus_conn
+        self.mfocus_conn = fsc.mfocus_conn
+        self.mnerve_conn = fsc.mnerve_conn
         self.websocket, self.traceray_id = fsc.rsc.websocket, fsc.rsc.traceray_id
         self.maica_pool = fsc.maica_pool
         self.sf_forming_buffer = self.EMPTY()
@@ -89,12 +90,13 @@ class SideBoundCoroutine(AsyncCreator):
             self.sf_forming_buffer = self.EMPTY()
             self._add(self.sf_forming_buffer, self.sf_content)
 
-class SideFunctionCoroutine(AsyncCreator):
+class AgentContextManager(AsyncCreator):
     """This is just a template. Do not initialize!"""
     def __init__(self, fsc: FullSocketsContainer, sf_inst=None, mt_inst=None):
         self.settings = fsc.maica_settings
         self.websocket, self.traceray_id = fsc.rsc.websocket, fsc.rsc.traceray_id
-        self.mcore_conn, self.mfocus_conn = fsc.mcore_conn, fsc.mfocus_conn
+        self.mfocus_conn = fsc.mfocus_conn
+        self.mnerve_conn = fsc.mnerve_conn
         self.sf_inst, self.mt_inst = sf_inst, mt_inst
         self.maica_pool = fsc.maica_pool
 
@@ -103,9 +105,6 @@ class SideFunctionCoroutine(AsyncCreator):
 
     async def reset(self):
         """Caution: we should reset sf_inst and mt_inst here, but these are done more manually to prevent duplication."""
-        self.tnd_aggressive = self.settings.extra.tnd_aggressive
-        if self.settings.temp.ic_prep:
-            self.tnd_aggressive = 2
         self.tools = []
         self.serial_messages = []
 
@@ -138,44 +137,9 @@ class SideFunctionCoroutine(AsyncCreator):
                     self.serial_messages.extend(message_additive)
                     assert self.serial_messages[-1]['role'] == 'assistant', 'Additive got corrupted chat history'
 
-        # This does no good. LLMs are too stupid for things like this.
-
-        # if not self.serial_messages or self.serial_messages[0].get('role') != 'system':
-        #     system_content = "你是一个信息检索助手, 因此保持输出和思考尽可能简短. 只要必要工具调用完成, 就在继续思考或作答前调用agent_finished." if self.settings.basic.target_lang == 'zh' else ""
-        #     self.serial_messages.insert(0, {'role': 'system', 'content': system_content})
-
         if user_input:
-
-            # # Having user input here suggests the last tool calls are over.
-            # # So we have to cleanup the thinking part and toolcalls.
-            # self.serial_messages = [msg for msg in self.serial_messages if msg.get('role') != 'tool']
-            # assistant_last_msg = ''
-            # for msg in self.serial_messages[::-1]:
-            #     if isinstance(msg, ChatCompletionMessage):
-            #         assistant_last_msg = msg.content + assistant_last_msg
-            #         self.serial_messages.pop()
-            #     elif msg.get('role') == 'assistant':
-            #         assistant_last_msg = msg.get('content') + assistant_last_msg
-            #         self.serial_messages.pop()
-            #     else:
-            #         break
-
-            # # Then we peal off the thinking part
-            # assistant_last_msg = proceed_agent_response(assistant_last_msg)
-
-            # if assistant_last_msg:
-            #     self.serial_messages.append({'role': 'assistant', 'content': assistant_last_msg})
-
             # The new OpenAI standard fucked all previous procedures
-            assistant_last_msg = ''
-
-            for msg in self.serial_messages[::-1]:
-                if msg.get('role') == 'user':
-                    break
-                elif isinstance(msg, ChatCompletionMessage):
-                    ind = self.serial_messages.index(msg)
-                    self.serial_messages[ind] = msg.model_dump(exclude=['reasoning_content'])
-
+            self.serial_messages = clean_msgs(self.serial_messages, exclude=['reasoning_content'])
             self.serial_messages.append({'role': 'user', 'content': user_input})
 
         elif tool_input:
@@ -188,6 +152,7 @@ class SideFunctionCoroutine(AsyncCreator):
             "messages": self.serial_messages,
             "tools": self.tools,
         }
+        # print(completion_args)
 
         resp = await self.mfocus_conn.make_completion(**completion_args)
         content, rcontent, tool_calls = resp.choices[0].message.content, getattr(resp.choices[0].message, 'reasoning_content', None), resp.choices[0].message.tool_calls

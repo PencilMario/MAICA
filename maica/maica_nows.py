@@ -5,8 +5,8 @@ from typing import *
 from Crypto.Random import random as crandom
 
 from maica.mtools import ProcessingImg
-from maica.mfocus import MFocusCoroutine, SfBoundCoroutine
-from maica.mtrigger import MTriggerCoroutine, MtBoundCoroutine
+from maica.mfocus import MFocusManager, SfPersistentManager
+from maica.mtrigger import MTriggerManager, MtPersistentManager
 from maica.maica_utils import *
 
 class NoWsCoroutine(AsyncCreator):
@@ -53,7 +53,7 @@ class NoWsCoroutine(AsyncCreator):
             else:
                 return []
         except Exception as e:
-            raise MaicaDbError(f'Chat session not JSON: {str(e)}', '500', 'maica_db_corruption') from e
+            raise MaicaDbError(f'Chat session not JSON', '500', 'maica_db_corruption') from e
 
     def _flattern_chat_session(self, content_json: list) -> str:
         if content_json:
@@ -109,6 +109,12 @@ class NoWsCoroutine(AsyncCreator):
             cut_status = 0
         return cut_status, content
     
+    @overload
+    async def rw_chat_session(self, irwa: Literal['i', 'r']='r', content_append: list=None, system_prompt: str=None, chat_session_num=None) -> tuple[int, list]:...
+
+    @overload
+    async def rw_chat_session(self, irwa: Literal['w', 'a']='r', content_append: list=None, system_prompt: str=None, chat_session_num=None) -> tuple[int, int]:...
+
     async def rw_chat_session(self, irwa='r', content_append: list=None, system_prompt: str=None, chat_session_num=None) -> tuple[int, int | list]:
         """A common way to operate chat sessions."""
         self._check_essentials()
@@ -252,22 +258,25 @@ class NoWsCoroutine(AsyncCreator):
         self._check_essentials()
         if isinstance(input, int):
             assert input < int(G.A.KEEP_MVISTA), f"Sequence must be smaller than {G.A.KEEP_MVISTA}"
-            uuid = (await self.list_user_mv())[input]
+            uuids = [(await self.list_user_mv())[input]]
+        elif isinstance(input, str):
+            uuids = [input]
         else:
-            uuid = input
+            uuids = await self.list_user_mv()
         
-        processing_img = ProcessingImg()
-        processing_img.det_path(uuid)
+        for uuid in uuids:
+            processing_img = ProcessingImg()
+            processing_img.det_path(uuid)
 
-        sql_expression_1 = "SELECT vista_id FROM mv_meta WHERE user_id = %s AND uuid = %s"
-        result = await self.maica_pool.query_get(expression=sql_expression_1, values=(self.settings.verification.user_id, uuid))
-        if not result:
-            raise MaicaInputWarning(f'{uuid} not available for this account')
-        vista_id = result[0]
+            sql_expression_1 = "SELECT vista_id FROM mv_meta WHERE user_id = %s AND uuid = %s"
+            result = await self.maica_pool.query_get(expression=sql_expression_1, values=(self.settings.verification.user_id, uuid))
+            if not result:
+                raise MaicaInputWarning(f'{uuid} not available for this account')
+            vista_id = result[0]
 
-        processing_img.delete()
-        sql_expression_2 = "DELETE FROM mv_meta WHERE vista_id = %s"
-        await self.maica_pool.query_modify(expression=sql_expression_2, values=(vista_id, ))
+            processing_img.delete()
+            sql_expression_2 = "DELETE FROM mv_meta WHERE vista_id = %s"
+            await self.maica_pool.query_modify(expression=sql_expression_2, values=(vista_id, ))
         
     async def store_mv(self, input: bytes) -> int:
         """Register a mv meta and store as file."""
@@ -337,13 +346,13 @@ class NoWsCoroutine(AsyncCreator):
         return new_system
     
     async def populate_auxiliary_inst(self) -> None:
-        self.sf_inst, self.mt_inst = await asyncio.gather(SfBoundCoroutine.async_create(self.fsc), MtBoundCoroutine.async_create(self.fsc))
-        self.mfocus_coro, self.mtrigger_coro = await asyncio.gather(MFocusCoroutine.async_create(self.fsc, self.sf_inst, self.mt_inst), MTriggerCoroutine.async_create(self.fsc, self.mt_inst, self.sf_inst))
+        self.sf_inst, self.mt_inst = await asyncio.gather(SfPersistentManager.async_create(self.fsc), MtPersistentManager.async_create(self.fsc))
+        self.mfocus_coro, self.mtrigger_coro = await asyncio.gather(MFocusManager.async_create(self.fsc, self.sf_inst, self.mt_inst), MTriggerManager.async_create(self.fsc, self.mt_inst, self.sf_inst))
 
     async def reset_auxiliary_inst(self) -> None:
         sb_list = []
         for sb_name in ['sf_inst', 'mt_inst', 'mfocus_coro', 'mtrigger_coro']:
-            sb = getattr(self, sb_name)
+            sb = getattr(self, sb_name, None)
             if sb:
                 sb_list.append(sb.reset())
         await asyncio.gather(*sb_list)
