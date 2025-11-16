@@ -1,6 +1,10 @@
 I'm sorry for not offering an English ver of this document but it's just too much work for me.
 If you want to read in English, use a translator.
 
++ 添加了MVista功能, 用于从图像中提取信息
+
++ 添加了MNerve功能, 用于快速处理简单任务
+
 + 添加migration
 
 - 弃用了-1重置参数的功能
@@ -16,3 +20,23 @@ If you want to read in English, use a translator.
 + 添加/vista端点, 作为mv图床
 
 = 改良了配置和环境变量的运作模式
+
++ 添加环境变量MAICA_KEEP_MVISTA, MAICA_ROTATE_MVISTA, MAICA_OPENAI_TIMEOUT
+
+= 现在MPostal默认启用bypass_mf
+
+= 现在搜索聚合功能默认由MNerve实现
+
++ 添加了sping以静默维持连接
+
++ 添加dscl_pvn功能和设置
+
+= 统一核心模型输出结束代码为maica_core_complete
+
++ 添加断点续传功能
+
+= 规范化登录行为, 统一使用type
+
++ 添加pre_astp和post_astp
+
+= 现在短连接端口返回更合理的状态码

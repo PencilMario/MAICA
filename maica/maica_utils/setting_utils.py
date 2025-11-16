@@ -7,7 +7,7 @@ from .gvars import *
 from .maica_utils import *
 
 @dataclass
-class _common_funcs():
+class _CommonFuncs():
     """Just a template. Do not initialize!"""
 
     def reset(self):
@@ -54,14 +54,14 @@ def create_prop(
     if not isinstance(setter_kwargs, dict):
         setter_kwargs = {}
     
-    def getter(self: _common_funcs):
+    def getter(self: _CommonFuncs):
         value = getattr(self, private_name, None)
         if getter_ext:
             for func in getter_ext:
                 value = func(self, n=name, v=value, **getter_kwargs)
         return value
     
-    def setter(self: _common_funcs, value):
+    def setter(self: _CommonFuncs, value):
         if setter_ext:
             for func in setter_ext:
                 value = func(self, n=name, v=value, **setter_kwargs)
@@ -118,7 +118,7 @@ def set_instance(self, n, v, types: list[type], **kwargs):
         raise AssertionError
     return v
 
-def set_spec_default(self, n, v, defaults: list=[None], **kwargs):
+def set_spec_default(self, n, v, defaults: tuple=(None, ), **kwargs):
     """Value to default if specificated value passed in."""
     if v in defaults:
         v = self.default(n)
@@ -128,7 +128,7 @@ class MaicaSettings():
     """All the per-client settings for MAICA."""
 
     @dataclass
-    class _identity(_common_funcs):
+    class _Identity(_CommonFuncs):
         """Note that this identity is not verified and not safe to use in most cases. Use verification for those."""
 
         _user_id: int = None
@@ -142,7 +142,7 @@ class MaicaSettings():
         email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [str]})
 
     @dataclass
-    class _verification(_identity):
+    class _Verification(_Identity):
         """Verified identity, safe to use."""
 
         user_id = create_prop('user_id', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [int]})
@@ -151,7 +151,7 @@ class MaicaSettings():
         email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [str]})
 
     @dataclass
-    class _basic(_common_funcs):
+    class _Basic(_CommonFuncs):
         """Major params that decide MAICA's behavior."""
 
         _stream_output: bool = True
@@ -181,7 +181,7 @@ class MaicaSettings():
         """Max session length."""
 
     @dataclass
-    class _extra(_common_funcs):
+    class _Extra(_CommonFuncs):
         """Params that aren't that important, but affect MAICA's behavior."""
 
         _sfe_aggressive: bool = False
@@ -193,6 +193,9 @@ class MaicaSettings():
         _pre_additive: int = 0
         _post_additive: int = 1
         _tz: Optional[str] = None
+        _dscl_pvn: bool = False
+        _pre_astp = True
+        _post_astp = False
 
         sfe_aggressive = create_prop('sfe_aggressive', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
         """Use name from savefile instead of [player] in prompts."""
@@ -212,27 +215,33 @@ class MaicaSettings():
         """Add history rounds for MFocus to understand the conversation."""
         tz = create_prop('tz', setter_ext=[set_instance], setter_kwargs={"types": [str, None]})
         """Timezone. This is not fully checked, double check before use."""
+        dscl_pvn = create_prop('dscl_pvn', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
+        """Check and warn about context quality descalation using MNerve."""
+        pre_astp = create_prop('pre_astp', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
+        """Disable MFocus sequential toolcall to save time."""
+        post_astp = create_prop('post_astp', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
+        """Disable MTrigger sequential toolcall to save time."""
 
     @dataclass
-    class _super(_common_funcs):
+    class _Super(_CommonFuncs):
         """Passthrough params to core LLM."""
 
         _max_tokens: int = 1600
-        _seed: int = None
+        _seed: Optional[int] = None
         _top_p: float = 0.7
         _temperature: float = 0.22
         _frequency_penalty: float = 0.44
         _presence_penalty: float = 0.34
 
         max_tokens = create_prop('max_tokens', setter_ext=[set_spec_default, set_range], setter_kwargs={"lower": 1, "upper": 2048})
-        seed = create_prop('seed', setter_ext=[set_instance], setter_kwargs={"types": [int]})
+        seed = create_prop('seed', setter_ext=[set_instance], setter_kwargs={"types": [int, None]})
         top_p = create_prop('top_p', setter_ext=[set_spec_default, set_range], setter_kwargs={"lower": 0.1, "upper": 1.0})
         temperature = create_prop('temperature', setter_ext=[set_spec_default, set_range], setter_kwargs={"lower": 0.0, "upper": 1.0})
         frequency_penalty = create_prop('frequency_penalty', setter_ext=[set_spec_default, set_range], setter_kwargs={"lower": 0.0, "upper": 1.0})
         presence_penalty = create_prop('presence_penalty', setter_ext=[set_spec_default, set_range], setter_kwargs={"lower": 0.0, "upper": 1.0})
 
     @dataclass
-    class _temp(_common_funcs):
+    class _Temp(_CommonFuncs):
         """Should be reset after each round of completion."""
 
         _chat_session: int=0
@@ -246,6 +255,7 @@ class MaicaSettings():
         _ic_prep: bool=False
         _strict_conv: bool=True
         _ms_cache: bool=False
+        _mv_imgs: Optional[list]=None
 
         chat_session = create_prop('chat_session', setter_ext=[set_spec_default, set_instance, set_range], setter_kwargs={"types": [int], "lower": -1, "upper": 9})
         sf_extraction_once = create_prop('sf_extraction_once', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
@@ -268,9 +278,10 @@ class MaicaSettings():
         """Strict conversation prompt."""
         ms_cache = create_prop('ms_cache', setter_ext=[set_spec_default, set_instance], setter_kwargs={"types": [bool]})
         """Cache the MSpire response."""
+        mv_imgs = create_prop('mv_imgs', setter_ext=[set_instance], setter_kwargs={"types": [list, None]})
 
     def __init__(self):
-        self.identity, self.verification, self.basic, self.extra, self.super, self.temp = self._identity(), self._verification(), self._basic(), self._extra(), self._super(), self._temp()
+        self.identity, self.verification, self.basic, self.extra, self.super, self.temp = self._Identity(), self._Verification(), self._Basic(), self._Extra(), self._Super(), self._Temp()
 
     def _dict(self):
         d = dict(self.identity)

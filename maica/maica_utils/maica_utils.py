@@ -2,6 +2,8 @@
 import logging
 import asyncio
 import httpx
+import aiomysql
+import openai
 import functools
 import hashlib
 import os
@@ -14,9 +16,13 @@ import time
 import datetime
 import random
 import traceback
+
 from typing import *
+from tenacity import *
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from openai.types.chat import ChatCompletionMessage
+from typing_extensions import deprecated
 from urllib.parse import urlparse
 from .locater import *
 from .gvars import *
@@ -138,6 +144,17 @@ class MaicaConnectionWarning(CommonMaicaWarning):
 class MaicaInternetWarning(CommonMaicaWarning):
     """This suggests the backend request action is not behaving normal."""
 
+RETRYABLE_EXCEPTIONS = (
+    aiomysql.OperationalError,
+    aiomysql.InterfaceError,
+    ConnectionError,
+    TimeoutError,
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.RateLimitError,
+    MaicaInternetWarning,
+)
+
 class AsyncCreator(ABC):
     """Inherit this for async init."""
     @abstractmethod
@@ -182,6 +199,7 @@ class LimitedList(list):
     def __repr__(self):
         return f"LimitedList(max_size={self.max_size}, {super().__repr__()})"
     
+@deprecated("Just use a tuple instead")
 class LoginResult():
     """
     A packed login result.
@@ -242,9 +260,49 @@ class ReUtils():
     re_sub_serp_datetime = re.compile(r'.{1,10}?,.{1,10}?-\s*')
     re_sub_clear_text = re.compile(r'^[\n\s]*(.*?)[\n\s]*$', re.S)
     re_match_secure_path = re.compile(r'^[a-zA-Z0-9_.-]+$')
+    re_search_wiki_avoid = re.compile(r"(模板|模闆|template|消歧义|消歧義|disambiguation)", re.I)
+    re_search_type_sping = re.compile(r'"type"\s*?:\s*?"sping"', re.I)
 
 class Decos():
     """Do not initialize."""
+    def conn_retryer_factory(
+        max_attempts: int=3,
+        min_wait: float=1,
+        max_wait: float=10,
+        retry_exceptions=RETRYABLE_EXCEPTIONS,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Mostly for instance methods."""
+        def decorator(func):
+            async def log_retry(retry_state):
+                self = retry_state.args[0] if retry_state else None
+                rsc = getattr(self, 'rsc', None); name = getattr(self, 'name', 'anon_conn')
+                websocket = rsc.websocket if rsc else None; traceray_id = rsc.traceray_id if rsc else ''
+                await messenger(websocket=websocket, status=f'{name}_temp_failure', info=f'{name} temporary failure, retrying...', code='304', traceray_id=traceray_id, type=MsgType.WARN)
+
+            @functools.wraps(func)
+            @retry(
+                stop=stop_after_attempt(max_attempts),
+                wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
+                retry=retry_if_exception_type(retry_exceptions),
+                before_sleep=log_retry,
+                reraise=True,
+            )
+            async def wrapper(self, *args, **kwargs):
+                return await func(self, *args, **kwargs)
+            return wrapper
+        return decorator
+
+    def log_task(func):
+        """Every~time you call my name~~~"""
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            func_name = func.__name__
+            sync_messenger(info=f"Running task {func_name} now", type=MsgType.PRIM_SYS)
+            result = await func(*args, **kwargs)
+            sync_messenger(info=f"Task {func_name} finished", type=MsgType.DEBUG)
+            return result
+        return wrapper
+
     def catch_exceptions(func):
         """Used for connection_utils."""
         @functools.wraps(func)
@@ -291,7 +349,7 @@ class Decos():
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                raise MaicaInputWarning(f'Acquired persistent not acceptable: {str(e) if str(e) else "Assertion"}', '405', 'maica_agent_persistent_bad') from e
+                raise MaicaInputWarning(f'Acquired persistent not acceptable: {str(e) or "Assertion"}', '405', 'maica_agent_persistent_bad') from e
         return wrapper
 
     def report_reading_error(func):
@@ -301,7 +359,7 @@ class Decos():
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                raise MaicaInputError(f'Access before necessary assignment: {str(e) if str(e) else "Assertion"}', '500', 'maica_settings_read_rejected') from e
+                raise MaicaInputError(f'Access before necessary assignment', '500', 'maica_settings_read_rejected') from e
         return wrapper
 
     def report_limit_warning(func):
@@ -311,7 +369,7 @@ class Decos():
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                raise MaicaInputWarning(f'Input param not acceptable: {str(e) if str(e) else "Assertion"}', '422', 'maica_settings_param_rejected') from e
+                raise MaicaInputWarning(f'Input param not acceptable: {str(e) or "Assertion"}', '422', 'maica_settings_param_rejected') from e
         return wrapper
 
     def report_limit_error(func):
@@ -322,7 +380,7 @@ class Decos():
                 assert not getattr(self, '_lock', None)
                 return func(self, *args, **kwargs)
             except Exception as e:
-                raise MaicaInputError(f'Input param not acceptable: {str(e) if str(e) else "Assertion"}', '500', 'maica_settings_param_rejected') from e
+                raise MaicaInputError(f'Input param not acceptable', '500', 'maica_settings_param_rejected') from e
         return wrapper
 
 @dataclass
@@ -332,6 +390,12 @@ class Desc():
 
     def __str__(self):
         return self.desc
+
+class DummyClass():
+    """Yes, dummy class."""
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 def default(exp, default, default_list: list=[None]) -> any:
     """If exp is in default list(normally None), use default."""
@@ -355,6 +419,13 @@ def ellipsis_str(input: any, limit=80) -> str:
     text = str(input)
     if len(text) > limit:
         text = text[:limit] + '...'
+    return text
+
+def ellipsis_large_str(input: any, limit=600) -> str:
+    """It converts anything large to str and ellipsis it."""
+    text = str(input)
+    if len(text) > limit:
+        text = text[:limit] + '\n... ...'
     return text
 
 def uscore_words_upper(text: str) -> str:
@@ -389,6 +460,15 @@ def alt_tools(tools: list) -> list:
                 new_tools[-1]['function'] = tool
                 new_tools[-1]['type'] = 'function'
             return new_tools
+        
+def clean_msgs(msgs: list[dict, ChatCompletionMessage], include: Optional[list[str]]=None, exclude: Optional[list[str]]=None) -> list[dict]:
+    """Clean a set of OpenAI msgs."""
+    def _convert_msg(msg: Union[dict, ChatCompletionMessage]):
+        if isinstance(msg, ChatCompletionMessage):
+            msg = msg.model_dump(include=include, exclude=exclude)
+        return msg
+
+    return [_convert_msg(i) for i in msgs]
 
 def maica_assert(condition, kwd='param'):
     """Normally used for input checkings."""
@@ -397,6 +477,15 @@ def maica_assert(condition, kwd='param'):
 
 def has_valid_content(text: Union[str, list, dict]):
     """If the LLM actually gave anything."""
+    if not text:
+        return False
+    
+    try:
+        text_json = json.loads(text)
+        if isinstance(text_json, (list, dict, tuple, set)):
+            return bool(text_json)
+    except Exception:...
+
     text = str(text)
     text_proc = text.lower().replace(' ', '').replace('\n', '')
     if (not text_proc) or text_proc in ['false', 'null', 'none']:
@@ -418,7 +507,7 @@ def is_word_start(text: str, *args: str):
             return True
     return False
 
-def proceed_agent_response(text: str, is_json=False) -> Union[str, list, dict]:
+def proceed_common_text(text: str, is_json=False) -> Union[str, list, dict]:
     """Proceeds thinking/nothinking."""
     try:
         answer_post_think = (ReUtils.re_search_post_think.search(text))[1]
@@ -427,15 +516,14 @@ def proceed_agent_response(text: str, is_json=False) -> Union[str, list, dict]:
             answer_post_think = text
         else:
             answer_post_think = None
-    if answer_post_think and not ReUtils.re_search_answer_none.search(answer_post_think) and is_json:
-        try:
-            answer_fin = (ReUtils.re_search_answer_json.search(answer_post_think))[1]
-            answer_fin_json = json.loads(answer_fin)
-            return answer_fin_json
-        except Exception:
-            answer_fin = None
+    if answer_post_think and is_json:
+        answer_fin = try_load_json(answer_post_think)
+    elif answer_post_think:
+        answer_fin = clean_text(answer_post_think)
+    elif is_json:
+        answer_fin = {}
     else:
-        answer_fin = answer_post_think
+        answer_fin = ''
     return answer_fin
 
 @overload
@@ -447,7 +535,7 @@ async def messenger(websocket=None, *args, **kwargs) -> None:
     if websocket and ws_tuple:
         await websocket.send(wrap_ws_formatter(*ws_tuple))
 
-def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False) -> list:
+def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False) -> tuple:
     """It could handle most log printing and exception raising jobs pretty automatically."""
     try:
         term_v = os.get_terminal_size().columns
@@ -559,25 +647,22 @@ async def wrap_run_in_exc(loop, func, *args, **kwargs) -> any:
 def limit_length(col: list, limit: int) -> list:
     return random.sample(col, limit) if limit < len(col) else col
 
-async def dld_json(url, retries=2) -> json:
+async def dld_json(url) -> json:
     """Get JSON context from an endpoint."""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36'}
+
+    @Decos.conn_retryer_factory()
+    async def _dld_json(fake_self, url):
+        nonlocal headers
+        async with httpx.AsyncClient(proxy=G.A.PROXY_ADDR) as client:
+            res = (await client.get(url, headers=headers)).json()
+            return res
+
     try:
-        for tries in range(0, retries + 1):
-            try:
-                client = httpx.AsyncClient(proxy=G.A.PROXY_ADDR)
-                res = (await client.get(url, headers=headers)).json()
-                break
-            except Exception as e:
-                if tries < retries:
-                    await messenger(info=f'HTTP temporary failure, retrying {str(tries + 1)} time(s)')
-                    await asyncio.sleep(0.5)
-                else:
-                    raise MaicaInternetWarning(f'Cannot get JSON response after {str(tries + 1)} times', '408') from e
+        res = await _dld_json(DummyClass(name="dld_json"), url)
     except Exception as e:
-        raise e
-    finally:
-        await client.aclose()
+        raise MaicaInternetWarning(f"Failed downloading json from {url}: {str(e)}") from e
+
     return res
 
 def numeric(num: str) -> Union[int, float]:
@@ -638,15 +723,21 @@ def clean_text(text: str) -> str:
     Clean a text phrase, mostly for internet search.
     After adapting to the OpenAI reasoning schema, we also use it for LLM outputs.
     """
-    text = ReUtils.re_sub_clear_text.sub(r'\1', text)
-    return text
-
-def try_load_json(sj: str) -> dict:
-    """I'd basically trust the LLM here, they're far better than the earlier ones."""
-    if not has_valid_content(sj):
-        return {}
     try:
-        return json.loads(sj)
+        text = ReUtils.re_sub_clear_text.sub(r'\1', text)
+        return text
+    except Exception:
+        return ''
+
+def try_load_json(sj: str) -> Union[dict, list]:
+    """I'd basically trust the LLM here, they're far better than the earlier ones."""
+    try:
+        try:
+            clean_sj = (ReUtils.re_search_answer_json.search(sj))[1]
+        except Exception:
+            clean_sj = sj.strip()
+        j = json.loads(clean_sj)
+        return j
     except Exception:
         return {}
 
@@ -660,3 +751,8 @@ def sysstruct() -> Literal['Windows', 'Linux']:
     sysstruct = platform.system()
     assert sysstruct in ['Windows', 'Linux'], 'Your system not supported'
     return sysstruct
+
+if __name__ == "__main__":
+    print(has_valid_content("""{
+  
+}"""))

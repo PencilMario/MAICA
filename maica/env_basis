@@ -1,10 +1,8 @@
-# Exclude these lines in your env configuration
+# It's suggested to exclude these lines (the top block) in your env configuration
 # Current backend version
-MAICA_CURR_VERSION = '1.2.000.rc4'
+MAICA_CURR_VERSION = '1.2.000'
 # Oldest capable backend version
-MAICA_LEGC_VERSION = '1.1.006'
-
-
+MAICA_LEGC_VERSION = '1.2.000.rc10'
 # cp ./env_basis ./.env
 # vim .env
 # Do not mv, rm or edit basis! They're required as default templates.
@@ -49,7 +47,7 @@ MAICA_MFOCUS_EXTRA = '
         }
     }
 '
-# MVista VL model endpoint
+# MVista VL model endpoint, leave empty to disable
 MAICA_MVISTA_ADDR = ''
 # MVista VL model key
 MAICA_MVISTA_KEY = ''
@@ -63,7 +61,7 @@ MAICA_MVISTA_EXTRA = '
         }
     }
 '
-# MNerve VL model endpoint
+# MNerve VL model endpoint, leave empty to disable
 MAICA_MNERVE_ADDR = ''
 # MNerve VL model key
 MAICA_MNERVE_KEY = ''
@@ -77,6 +75,8 @@ MAICA_MNERVE_EXTRA = '
         }
     }
 '
+# Wait [] seconds before giving up an OpenAI query or not
+MAICA_OPENAI_TIMEOUT = '90'
 # 0 = ms-swift, 1 = modern openai
 MAICA_ALT_TOOLCALL = '1'
 # MFocus model think postfix, for hybrid thinking models only

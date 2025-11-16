@@ -6,7 +6,7 @@ import traceback
 from .trigger_class import *
 from maica.maica_utils import *
 
-class MtBoundCoroutine(SideBoundCoroutine):
+class MtPersistentManager(PersistentManager):
     DB_NAME = 'triggers'
     PRIM_KEY = 'trigger_id'
     FUNC_NAME = 'mtrigger'
@@ -52,7 +52,7 @@ class MtBoundCoroutine(SideBoundCoroutine):
 
     @Decos.report_data_error
     def use_only(self, *args) -> None:
-        self.sf_forming_buffer = args
+        self.sf_forming_buffer = list(args)
 
     @Decos.report_data_error
     def read_from_sf(self, seq) -> any:

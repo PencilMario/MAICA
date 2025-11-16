@@ -78,7 +78,17 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
             MVista: 为MAICA补充视觉, 由另一多模态模型处理并提供信息到核心模型.
 
-                * 截至文档编纂时为止, MVista尚未投用.
+        目前为止, MAICA后端总共使用四个模型端点(不含MTTS):
+
+            mcore: 核心模型, 仅角色扮演.
+
+            mfocus: 推荐使用thinking或混合思考模型, 处理信息, 逻辑与行为.
+
+            mvista: 可选, 必须具备视觉多模态能力, 推荐使用instruct模型.
+
+            mnerve: 可选, 用于高速地处理简单问题, 推荐使用instruct模型.
+
+            * 一个合适的模型可以兼任多个岗位, 这根据你的实际情况而定.
 
         在后文中, 我们会频繁地用到这些设计的概念.
 
@@ -108,7 +118,9 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
         在长连接建立后, 你应该先发送令牌:
 
-            {"access_token": "你的令牌"}
+            {"type": "auth", "access_token": "你的令牌"}
+
+            * 自v1.2.000.rc11后, 登录阶段也建议添加type. 未来版本可能弃用旧的行为.
 
         若令牌验证无误, 该会话就已经登录完毕.
 
@@ -124,7 +136,15 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
             * 反劫持cookie不强制. 在输入中添加cookie键并传入正确的cookie即可启用, 此后该会话每次输入必须传入.
             * 说实话并不能真的防住, 顶多增加点难度.
 
+        紧接着, 服务器会发送连接建立通告, 服务模型名称, 以及可选模型的名称.
+
+            status为maica_model_anno的消息通告核心和MFocus模型的名称.
+            status为maica_model_mvista的消息通告MVista模型的名称. 若该通告未发出, 代表实例未启用MVista.
+            status为maica_model_mnerve的消息通告MNerve模型的名称. 若该通告未发出, 代表实例未启用MNerve.
+
     调整设置:
+
+        * 自v1.1更新后, 登录后的输入均要求携带type. 未来版本可能弃用旧的行为.
 
         在登录完成后, 你可以随时修改会话设置:
 
@@ -149,6 +169,9 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
                     "pre_additive": 0,
                     "post_additive": 1,
                     "tz": null,
+                    "dscl_pvn": false,
+                    "pre_astp": true,
+                    "post_astp": false,
 
                     "max_tokens": 1600,
                     "seed": null,
@@ -253,6 +276,23 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
                     * 其实不太算一个高级设置, 有需要可以调. 设为null默认根据语言选择.
 
+                dscl_pvn: 对话长度超过3轮后, 在每轮对话结束时, 要求MNerve介入检查输出合理性.
+
+                    + 量化地检测判断会话劣化情况, 以免用户注意不到.
+                    - 产生额外的MNerve开销.
+                    - 我觉得智力正常的人都用不上这种功能才对.
+
+                pre_astp: 禁用MFocus工具链循环以节约时间.
+
+                    + 多数工具调用情况下节约时间, 降低TTFT.
+                    - 有可能缺漏信息.
+                    - 启用时会阻止mf_aggressive.
+
+                post_astp: 禁用MTrigger工具链循环以节约时间.
+
+                    + 多数触发器调用情况下节约时间.
+                    - 明显更容易缺漏调用.
+
             超参数:
 
                 超参数直接传入核心模型, 其具体含义自行查询相关文档.
@@ -311,14 +351,14 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
                 {"code": "100", "status": "maica_core_streaming_continue", "content": "色有", "type": "carriage", "timestamp": 时间戳}
                 {"code": "100", "status": "maica_core_streaming_continue", "content": "很多, ", "type": "carriage", "timestamp": 时间戳}
                 ...
-                {"code": "1000", "status": "maica_core_streaming_done", "content": "Streaming finished with seed 42 for user, 10 packets sent", "type": "carriage", "timestamp": 时间戳}
+                {"code": "1000", "status": "maica_core_complete", "content": "Streaming finished with seed 42 for user, 10 packets sent", "type": "carriage", "timestamp": 时间戳}
 
                     * 应当注意, 自v1.1更新之后, 流式输出不再提供seq键, 因为websocket的顺序是安全的.
 
             若stream_output为false:
 
                 {"code": "200", "status": "maica_core_nostream_reply", "content": "我也爱你, [player]!", "type": "carriage", "timestamp": 时间戳}
-                {"code": "1000", "status": "maica_core_nostream_done", "content": "Reply sent with seed 42 for user", "type": "carriage", "timestamp": 时间戳}
+                {"code": "1000", "status": "maica_core_complete", "content": "Reply sent with seed 42 for user", "type": "carriage", "timestamp": 时间戳}
 
             除输出形式外, 二者的表现相同.
 
@@ -329,8 +369,40 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
             {"code": "1001", "status": "maica_mtrigger_done", "content": "MTrigger ended with 2 triggers sent", "timestamp": 时间戳}
 
                 * 应当注意, maica_mtrigger_trigger的content是可处理内容, 而非人类可读内容. 这是一个例外.
+                * 自v1.2.000.rc9后, maica_mtrigger_done消息已标记为弃用(但仍然会被发出). 你应当检测maica_chat_loop_finished以确认所有后处理完成.
+
+        在响应完成后, 若dscl_pvn启用且符合条件, MAICA会发送劣化检测结果:
+
+            {"code": "200", "status": "maica_dscl_status", "content": [输出合理性, 可信度], "timestamp": 时间戳}
+
+                * 应当注意, maica_dscl_status的content是可处理内容, 而非人类可读内容. 这是一个例外.
+
+                其中, 输出合理性是一个bool, 可信度是一个float. 若合理性为False且可信度高于一定阈值, 可以提醒用户清除session.
+
+                    * 对话长度超过3轮前dscl_pvn不工作, 即使其已经启用.
+                    * dscl_pvn基于MNerve, 后端部署不一定有实现. 未实现MNerve的后端只会返回[True, 0.1].
+
+                * 应当注意, dscl_pvn与MTrigger同时启动, 其消息发送不存在严格的先后顺序.
         
         在一轮对话循环完全完成后, MAICA会发送通告, 其status为maica_chat_loop_finished. 此时可以进行下一次输入.
+
+    断点续传:
+
+        websocket在广域网的连接是可能中断的. 为确保用户体验的连贯一致性, MAICA提供简单的断点续传功能.
+
+            * 仅当核心模型开始处理时, 断点续传保护功能才会介入. 中断早于核心模型开始处理的情况不能续传, 应当重发query.
+
+            在重新连接后, 发送续传请求:
+
+                {"type": "reconn"}
+
+            MAICA会继续发送此前未发完的响应数据.
+
+                * 已生成完的部分将在极短时间内全部发出. 若重连时生成仍未完成, 后续的流式输出会继续.
+                * 断点续传保护功能介入后, 已中断的连接协程会继续运行, 直到全流程完成. 在此期间重连会被视为重复登录, 其行为受后端配置MAICA_KICK_STALE_CONNS影响.
+                * 所有内容续传完后, 后端会发送status为maica_reconn_buffer_drained的提示. 若不存在待传内容, 则会发送maica_reconn_buffer_empty.
+                * 下一次断点续传保护开始记录时, 上一次的记录内容就会被销毁.
+                * 流式传输, 非流式传输, MTrigger内容等都支持断点续传保护功能.
 
     附加功能:
 
@@ -387,7 +459,7 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
                 其中, 若MPostal请求体为str则使用简单模式, 将其设置为一个dict可进行更详细的设置:
 
-                    {"header": "信件标题", "content": "信件内容", "bypass_mf": false, "bypass_mt": true, "bypass_stream": true, "ic_prep": true, "strict_conv": false}
+                    {"header": "信件标题", "content": "信件内容", "bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "ic_prep": true, "strict_conv": false}
 
                         * 简单模式下的str将被用作信件内容, 其余条目留空或默认.
 
@@ -406,9 +478,17 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
             生成MVista响应:
 
-                * 截至文档编纂时为止, MVista尚未投用.
+                {"type": "query", "chat_session": "0", "query": "你能看到图片上有什么吗?", "vision": ["图片链接"]}
 
-            * 应当注意, MAICA-MTTS为拓展性起见, 并不与MAICA主项目共用协议或后端, 在此不作收录.
+                    * MVista的实现基于独立VLM, 后端部署不一定有实现. 向未实现MVista的后端发起请求会被忽略.
+                    * MVista是MFocus的下属模块. 要使用MVista, 你必须启用MFocus.
+
+                    * 图片链接可以一次上传多个, 但最多不超过后端实例允许保存的上限.
+                    * 图片链接必须是完整链接, 可以来自后端专用存储或任意网络图床, 必须开放公开下载.
+
+                    * 注意: 对于与MVista相关的隐私问题, 参见对应端点的注意事项.
+
+            * 应当注意, 为拓展性起见, MAICA-MTTS作为MAICA后端的可选依赖安装, 并不直接属于MAICA仓库.
             * 对于关于MAICA-MTTS的问题, 参见其附带的文档.
 
         除此之外, MAICA长连接还有一些开发用途的功能:
@@ -419,8 +499,18 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
                 服务器会发回一个status为pong的响应.
 
-                    * 仅在登录完成后可以发送心跳.
+                    * 自v1.2.000.rc11后, ping可以在登录前发送.
                     * 心跳连接不强制发送, 但可用于连接性和延迟检测等.
+
+            安静心跳连接:
+
+                {"type": "sping"}
+
+                服务器不会响应.
+
+                    * 自v1.2.000.rc11后, sping可以在登录前发送.
+                    * 说实话我不知道这个能有什么用, 但是先做了吧.
+                    * 如果单纯用于连接保活, 你也许应该用这个.
 
             单轮MFocus存档:
 
@@ -645,6 +735,11 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
                         其中type的值可选"norm"或"add", 前者代表归正一个不标准的表情, 后者代表为没有表情的句子补全表情.
 
+                        * norm会优先尝试通过简单的匹配处理表情, 如果失败会使LLM介入.
+                        * 实际上, add也可以处理不标准的表情, 但其总是使LLM介入. 建议尽可能控制用量.
+
+                        * LLM介入基于MNerve, 后端部署不一定有实现. 向未实现MNerve的后端发起请求会回退到简单匹配处理.
+
                         target_lang: 目标语言, 可选"zh"或"en".
 
             返回的content:
@@ -668,9 +763,9 @@ MAICA的通信主要以两部分构成, 长连接(websocket)和短连接. 其中
 
             端点: DELETE /vista
 
-            * 需要access_token, content
+            * 需要access_token, 可选content
 
-                其中content为str或int, 代表需删除图片的uuid或序号(从0开始, 由新到旧).
+                其中content为str或int, 代表需删除图片的uuid或序号(从0开始, 由新到旧). 若无content则全部删除.
 
             该端点不会返回content.
 

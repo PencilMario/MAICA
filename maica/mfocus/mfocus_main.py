@@ -7,14 +7,14 @@ import colorama
 
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from typing import *
-from maica.mfocus.mfocus_sfe import SfBoundCoroutine
-from maica.mtrigger.mtrigger_sfe import MtBoundCoroutine
+from maica.mfocus.mfocus_sfe import SfPersistentManager
+from maica.mtrigger.mtrigger_sfe import MtPersistentManager
 from maica.mfocus.agent_modules import AgentTools
 from maica.maica_utils import *
 from maica.mtools import providers
 
-class MFocusCoroutine(SideFunctionCoroutine):
-    def __init__(self, fsc: FullSocketsContainer, sf_inst: SfBoundCoroutine, mt_inst: Optional[MtBoundCoroutine]=None):
+class MFocusManager(AgentContextManager):
+    def __init__(self, fsc: FullSocketsContainer, sf_inst: SfPersistentManager, mt_inst: Optional[MtPersistentManager]=None):
         super().__init__(fsc, sf_inst, mt_inst)        
         self.agent_tools = AgentTools(fsc, sf_inst)
 
@@ -209,6 +209,30 @@ class MFocusCoroutine(SideFunctionCoroutine):
                         }
                     },
                 )
+
+        if self.settings.temp.mv_imgs:
+            self.tools.append(
+                {
+                    "name": "vista_acquire",
+                    "description": "用户已上传了一到数张图片. 此工具能从用户上传的图片中获取信息, 并以文字形式返回. 如果用户要求你使用视觉或查看图片等, 则调用该工具." if self.settings.basic.target_lang == 'zh' else "User has uploaded one or several images. This tool can extract information from images user uploaded, and return in plain text. If user is requesting you to use your vision, read pictures or do related things, use this tool.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "需要在图片中提取的信息, 应当简洁明确. 留空表示需要概括图片内容." if self.settings.basic.target_lang == 'zh' else "The question you want to search from the image, which should be brief and clear. Leave empty to get a brief introduction of its content.",
+                                "example_value": "图中人物的衣服颜色" if self.settings.basic.target_lang == 'zh' else "Color of man on the picture's clothes"
+                            }
+                        },
+                        "required": [
+                        ],
+                        "optional": [
+                            "query",
+                        ]
+                    }
+                },
+            )
+
         if self.settings.extra.mf_aggressive:
             self.tools.append(
                 {
@@ -231,28 +255,29 @@ class MFocusCoroutine(SideFunctionCoroutine):
                     }
                 },
             )
-        self.tools.append(
-            {
-                "name": "agent_finished",
-                "description": "若你不需要任何工具就能作出回答, 则在作出任何额外思考, 工具调用或最终回答之前, 调用此工具." if self.settings.basic.target_lang == 'zh' else "If you don't need any other tool to make your answer, call this tool before any extra thinking, tool calling or final answer.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                    "required": [
-                    ],
-                    "optional": [
-                    ]
-                }
-            },
-        )
+        else:
+            self.tools.append(
+                {
+                    "name": "agent_finished",
+                    "description": f"若你已调用了所有其它必要的工具, 或不需要调用任何其它工具, 则在作出最终回答之前调用此工具, 以表示调用完成." if self.settings.basic.target_lang == 'zh' else f"Call this tool after you've finished calling every other necessary tool, or if you don't need any other tool. Call this tool before making final answer, so we know toolcalling has finished.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                        },
+                        "required": [
+                        ],
+                        "optional": [
+                        ]
+                    }
+                },
+            )
 
         self.tools = alt_tools(self.tools)
 
     async def _construct_query(self, user_input=None, tool_input=None, tool_id=None):
         await super()._construct_query(user_input, tool_input, tool_id, 'pre')
     
-    async def agenting(self, query):
+    async def agenting(self, query) -> str:
         try:
 
             # Just all the tools
@@ -264,6 +289,7 @@ class MFocusCoroutine(SideFunctionCoroutine):
                 "persistent_acquire": '',
                 "search_internet": '',
                 "react_trigger": '',
+                "vista_acquire": '',
             }
             conclusion_answer = None
 
@@ -296,11 +322,8 @@ class MFocusCoroutine(SideFunctionCoroutine):
                 cycle += 1
 
                 resp_content, resp_reasoning, resp_tools = await self._send_query(thinking=True)
-                resp_content, resp_reasoning = clean_text(resp_content), clean_text(resp_reasoning)
-                if not has_valid_content(resp_content):
-                    resp_content = None
-                if not has_valid_content(resp_reasoning):
-                    resp_reasoning = None
+                resp_content, resp_reasoning = proceed_common_text(resp_content), proceed_common_text(resp_reasoning)
+
                 await messenger(self.websocket, 'maica_mfocus_toolchain', f'\nMFocus toolchain {cycle} round responded, response is:\nR: {resp_reasoning}\nA: {resp_content}\nAnalyzing response...', code='200')
                 tool_seq = 0
                 if resp_tools:
@@ -314,9 +337,14 @@ class MFocusCoroutine(SideFunctionCoroutine):
                         machine = humane = None
                         args = []
 
-                        kwargs = try_load_json(tool_func_args)
+                        kwargs = proceed_common_text(tool_func_args, is_json=True)
+                        if not kwargs:
+                            kwargs = {}
+
                         if tool_func_name == "search_internet":
                             kwargs['original_query'] = query
+                        elif tool_func_name == "vista_acquire":
+                            kwargs['img_list'] = self.settings.temp.mv_imgs
 
                         function_route = getattr(self.agent_tools, tool_func_name, None)
                         if function_route:
@@ -344,15 +372,23 @@ class MFocusCoroutine(SideFunctionCoroutine):
                                 case _:
                                     # This tool call is unrecognizable
                                     raise MaicaInputError('Unrecognizable toolcall recieved', '405')
+                                
                         if not has_valid_content(machine):
+                            await messenger(self.websocket, 'maica_mfocus_parallel_empty', f'Answer to parallel tool {tool_seq}/{len(resp_tools)} is empty', '200', type=MsgType.WARN)
                             machine = '未获得有效信息' if self.settings.basic.target_lang == 'zh' else 'No useful information found'
-                        await self._construct_query(tool_input=machine, tool_id=tool_id)
 
-                        if has_valid_content(humane):
+                        elif has_valid_content(humane):
                             await messenger(self.websocket, 'maica_mfocus_parallel_result', f'Answer to parallel tool {tool_seq}/{len(resp_tools)} is "{ellipsis_str(humane, 50)}"', '200', type=MsgType.INFO)
                             _instructed_add(tool_func_name, humane)
+
+                        await self._construct_query(tool_input=machine, tool_id=tool_id)
+
                 else:
                     await messenger(self.websocket, 'maica_mfocus_absent', f'No tool called, ending toolchain...', '204', type=MsgType.INFO, color=colorama.Fore.LIGHTBLUE_EX)
+                    ending = True
+
+                if self.settings.extra.pre_astp and not ending:
+                    await messenger(self.websocket, 'maica_mfocus_astp', f'MFocus interrupted by pre_astp, ending toolchain...', '200', type=MsgType.INFO, color=colorama.Fore.LIGHTBLUE_EX)
                     ending = True
 
                 await messenger(self.websocket, 'maica_mfocus_round_finish', f'MFocus toolchain {cycle} round finished, ending is {str(ending)}', '200', type=MsgType.INFO, color=colorama.Fore.BLUE)
@@ -362,7 +398,7 @@ class MFocusCoroutine(SideFunctionCoroutine):
                 
                 # So we use last response instead if no conclusion offered
                 if not conclusion_answer:
-                    conclusion_answer = proceed_agent_response(resp_content)
+                    conclusion_answer = proceed_common_text(resp_content)
 
                 # If there is information and answer
                 if cycle >= 2 and conclusion_answer:
@@ -372,13 +408,13 @@ class MFocusCoroutine(SideFunctionCoroutine):
                 await messenger(self.websocket, 'maica_mfocus_no_conclusion', 'MFocus got no conclusion, falling back to instruction', '404', traceray_id=self.traceray_id)
                 
             # Then if mfa not enabled or ignored
-            if self.tnd_aggressive >= 1:
+            if self.settings.extra.tnd_aggressive >= 1:
                 # Add time and events
                 if not instructed_answer.get('time_acquire'):
                     _instructed_add('time_acquire', (await self.agent_tools.time_acquire())[1], False)
                 if not instructed_answer.get('event_acquire'):
                     _instructed_add('event_acquire', (await self.agent_tools.event_acquire())[1], False)
-            if self.tnd_aggressive >= 2:
+            if self.settings.extra.tnd_aggressive >= 2 or self.settings.temp.ic_prep:
                 # Add date and weather
                 if not instructed_answer.get('date_acquire'):
                     _instructed_add('date_acquire', (await self.agent_tools.date_acquire())[1], False)
@@ -396,7 +432,7 @@ class MFocusCoroutine(SideFunctionCoroutine):
                             v = ''
                     else:
                         if v:
-                            v = '[' + v + ']'
+                            v = '[' + v + ']' if isinstance(v, str) else str(v)
                         else:
                             v = ''
                     instructed_answer_str += v
@@ -413,4 +449,4 @@ class MFocusCoroutine(SideFunctionCoroutine):
             raise MaicaConnectionWarning(str(we), '408') from we
 
         except Exception as e:
-            raise CommonMaicaError(str(e), '500', 'maica_mfocus_critical') from e
+            raise CommonMaicaError('Uncaught MFocus exception happened', '500', 'maica_mfocus_critical') from e

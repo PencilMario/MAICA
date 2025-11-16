@@ -7,12 +7,12 @@ import colorama
 
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from typing import *
-from maica.mfocus.mfocus_sfe import SfBoundCoroutine
-from maica.mtrigger.mtrigger_sfe import MtBoundCoroutine
+from maica.mfocus.mfocus_sfe import SfPersistentManager
+from maica.mtrigger.mtrigger_sfe import MtPersistentManager
 from maica.maica_utils import *
 
-class MTriggerCoroutine(SideFunctionCoroutine):
-    def __init__(self, fsc: FullSocketsContainer, mt_inst: MtBoundCoroutine, sf_inst: Optional[SfBoundCoroutine]=None):
+class MTriggerManager(AgentContextManager):
+    def __init__(self, fsc: FullSocketsContainer, mt_inst: MtPersistentManager, sf_inst: Optional[SfPersistentManager]=None):
         super().__init__(fsc, sf_inst, mt_inst)
 
     def _construct_tools(self):
@@ -147,7 +147,7 @@ class MTriggerCoroutine(SideFunctionCoroutine):
         self.tools.append(
             {
                 "name": "agent_finished",
-                "description": f"若你已调用了所有其它必要的工具, 则在作出任何额外思考或最终回答之前, 调用此工具以表示调用完成." if self.settings.basic.target_lang == 'zh' else f"Call this tool after you've finished calling every other necessary tool, call this tool before any extra thinking or final answer, so we know you're done.",
+                "description": f"若你已调用了所有其它必要的工具, 或不需要调用任何其它工具, 则在作出最终回答之前调用此工具, 以表示调用完成." if self.settings.basic.target_lang == 'zh' else f"Call this tool after you've finished calling every other necessary tool, or if you don't need any other tool. Call this tool before making final answer, so we know toolcalling has finished.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -165,7 +165,7 @@ class MTriggerCoroutine(SideFunctionCoroutine):
     async def _construct_query(self, user_input=None, tool_input=None, tool_id=None):
         await super()._construct_query(user_input, tool_input, tool_id, 'post')
 
-    async def triggering(self, input, output):
+    async def triggering(self, input, output, bm=messenger) -> None:
         try:
 
             # Prepare the first query first
@@ -185,12 +185,9 @@ class MTriggerCoroutine(SideFunctionCoroutine):
                 cycle += 1
 
                 resp_content, resp_reasoning, resp_tools = await self._send_query(thinking=True)
-                resp_content, resp_reasoning = clean_text(resp_content), clean_text(resp_reasoning)
-                if not has_valid_content(resp_content):
-                    resp_content = None
-                if not has_valid_content(resp_reasoning):
-                    resp_reasoning = None
-                await messenger(self.websocket, 'maica_mtrigger_toolchain', f'\nMTrigger toolchain {cycle} round responded, response is:\nR: {resp_reasoning}\nA: {resp_content}\nAnalyzing response...', code='200')
+                resp_content, resp_reasoning = proceed_common_text(resp_content), proceed_common_text(resp_reasoning)
+
+                await bm(self.websocket, 'maica_mtrigger_toolchain', f'\nMTrigger toolchain {cycle} round responded, response is:\nR: {resp_reasoning}\nA: {resp_content}\nAnalyzing response...', code='200')
                 tool_seq = 0
                 if resp_tools:
                     for resp_tool in resp_tools:
@@ -198,24 +195,29 @@ class MTriggerCoroutine(SideFunctionCoroutine):
                         # Tool parallel support
                         tool_seq += 1; all_tool_count += 1
                         tool_id, tool_type, tool_func_name, tool_func_args = resp_tool.id, resp_tool.type, resp_tool.function.name, resp_tool.function.arguments
-                        await messenger(self.websocket, 'maica_mtrigger_parallel_tool', f'\nCalling parallel tool {tool_seq}/{len(resp_tools)}:\n{resp_tool}\nSending trigger...', '200', type=MsgType.INFO, color=colorama.Fore.BLUE)
+                        await bm(self.websocket, 'maica_mtrigger_parallel_tool', f'\nCalling parallel tool {tool_seq}/{len(resp_tools)}:\n{resp_tool}\nSending trigger...', '200', type=MsgType.INFO, color=colorama.Fore.BLUE)
 
                         if tool_func_name == 'agent_finished':
                             ending = True
                             break
                         else:
-                            trigger_signal = {tool_func_name: try_load_json(tool_func_args)}
-                            await messenger(self.websocket, 'maica_mtrigger_trigger', trigger_signal, '200', type='carriage')
+                            trigger_signal = {tool_func_name: proceed_common_text(tool_func_args, is_json=True)}
+                            await bm(self.websocket, 'maica_mtrigger_trigger', trigger_signal, '200', type=MsgType.CARRIAGE)
 
                             machine = f'{tool_func_name}已被调用过并生效' if self.settings.basic.target_lang == 'zh' else f'{tool_func_name} has been called already and taking effect'
                             await self._construct_query(tool_input=machine, tool_id=tool_id)
 
                 else:
+                    await messenger(self.websocket, 'maica_mtrigger_absent', f'No tool called, ending toolchain...', '204', type=MsgType.INFO, color=colorama.Fore.LIGHTBLUE_EX)
                     ending = True
                     
-                await messenger(self.websocket, 'maica_mtrigger_round_finish', f'MTrigger toolchain {cycle} round finished, ending is {str(ending)}', '200', type=MsgType.INFO, color=colorama.Fore.BLUE)
+                if self.settings.extra.post_astp and not ending:
+                    await messenger(self.websocket, 'maica_mtrigger_astp', f'MTrigger interrupted by pre_astp, ending toolchain...', '200', type=MsgType.INFO, color=colorama.Fore.LIGHTBLUE_EX)
+                    ending = True
+
+                await bm(self.websocket, 'maica_mtrigger_round_finish', f'MTrigger toolchain {cycle} round finished, ending is {str(ending)}', '200', type=MsgType.INFO, color=colorama.Fore.BLUE)
             # This goes -1 if agent_finished not called, but I decide to leave it be
-            await messenger(self.websocket, 'maica_mtrigger_done', f'MTrigger ended with {all_tool_count - 1} triggers sent', '1001', color=colorama.Fore.LIGHTBLUE_EX)
+            await bm(self.websocket, 'maica_mtrigger_done', f'MTrigger ended with {all_tool_count - 1} triggers sent', '1001', color=colorama.Fore.LIGHTBLUE_EX)
 
         except CommonMaicaException as ce:
             raise ce
@@ -224,4 +226,4 @@ class MTriggerCoroutine(SideFunctionCoroutine):
             raise MaicaConnectionWarning(str(we), '408') from we
 
         except Exception as e:
-            raise CommonMaicaError(str(e), '500', 'maica_mtrigger_critical') from e
+            raise CommonMaicaError('Uncaught MTrigger exception happened', '500', 'maica_mtrigger_critical') from e
