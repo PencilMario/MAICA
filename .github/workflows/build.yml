@@ -22,8 +22,10 @@ jobs:
           python-version: '3.12'
           architecture: 'x64'
 
-      - name: Install Dependencies for MAICA
-        run: pip install -r requirements.txt
+      - name: Install All Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements_2.txt
 
       - name: Build MAICA Executable
         uses: Nuitka/Nuitka-Action@main
@@ -31,9 +33,6 @@ jobs:
           nuitka-version: main
           script-name: maica/maica_starter.py
           mode: app
-
-      - name: Install Dependencies for Register
-        run: pip install -r requirements_2.txt
 
       - name: Build Register Executable
         uses: Nuitka/Nuitka-Action@main
@@ -58,24 +57,32 @@ jobs:
         run: |
           $version = (Get-Content maica/env_basis | Select-String 'MAICA_CURR_VERSION' | ForEach-Object {$_ -replace "^[^']*'([^']*)'.*", '$1'})
           $tag_name = "v$version"
+          "tag=$tag_name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
           # Check if tag already exists
           $tagExists = git rev-parse "$tag_name" 2>$null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Tag $tag_name already exists. Skipping tag creation."
+            Write-Host "Tag $tag_name already exists."
             "tag_exists=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           } else {
+            Write-Host "Creating new tag $tag_name"
             git config user.name github-actions
             git config user.email github-actions@github.com
             git tag "$tag_name"
             git push origin "$tag_name"
-            "tag=$tag_name" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             "tag_exists=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
 
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MAICA-${{ steps.create_tag.outputs.tag }}
+          path: dist/*
+          retention-days: 90
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
-        if: github.ref == 'refs/heads/main' && steps.create_tag.outputs.tag_exists == 'false'
+        if: github.ref == 'refs/heads/main'
         with:
           tag_name: ${{ steps.create_tag.outputs.tag }}
           files: |
