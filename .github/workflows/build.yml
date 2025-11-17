@@ -10,9 +10,8 @@ on:
         type: string
 
 jobs:
-  build:
+  build-maica:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +21,8 @@ jobs:
           python-version: '3.12'
           architecture: 'x64'
 
-      - name: Install All Dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements_2.txt
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
 
       - name: Build MAICA Executable
         uses: Nuitka/Nuitka-Action@main
@@ -34,12 +31,58 @@ jobs:
           script-name: maica/maica_starter.py
           mode: app
 
+      - name: Upload MAICA Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: maica-executable
+          path: build/maica_starter.exe
+          retention-days: 1
+
+  build-register:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+
+      - name: Install Dependencies
+        run: pip install -r requirements_2.txt
+
       - name: Build Register Executable
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
           script-name: maica/create_account.py
           mode: app
+
+      - name: Upload Register Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: register-executable
+          path: build/create_account.exe
+          retention-days: 1
+
+  release:
+    needs: [build-maica, build-register]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download MAICA Executable
+        uses: actions/download-artifact@v4
+        with:
+          name: maica-executable
+          path: build/
+
+      - name: Download Register Executable
+        uses: actions/download-artifact@v4
+        with:
+          name: register-executable
+          path: build/
 
       - name: Prepare Release Files
         shell: pwsh
