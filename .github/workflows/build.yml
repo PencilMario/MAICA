@@ -22,7 +22,9 @@ jobs:
           architecture: 'x64'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install python-magic-bin
 
       - name: Build MAICA Executable
         uses: Nuitka/Nuitka-Action@main
@@ -31,6 +33,7 @@ jobs:
           script-name: maica/maica_starter.py
           mode: app
           include-package: websockets,magic
+          include-package-data: magic
 
 
       - name: Upload MAICA Executable
