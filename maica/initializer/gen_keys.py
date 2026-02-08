@@ -78,31 +78,51 @@ def yank_file(path: str, prefix="[maica-keys] "):
 def generate_rsa_keys():
     prv_path, pub_path = get_keys_path()
     try:
-        with open(prv_path, "r") as prvkey_file:
-            prvkey = prvkey_file.read()
+        with open(prv_path, "r") as privkey_file:
+            prvkey = privkey_file.read()
         with open(pub_path, "r") as pubkey_file:
             pubkey = pubkey_file.read()
-        
+
         sync_messenger(info="[maica-keys] Keys exist already, skipping...", type=MsgType.WARN)
         return
-    
-    except Exception:
+
+    except FileNotFoundError:
         sync_messenger(info="[maica-keys] Keys not exist, creating...", type=MsgType.DEBUG)
-        os.makedirs(get_inner_path('keys'))
-    
-        key = RSA.generate(2048)
-        
-        private_key = key.export_key()
 
-        with open(prv_path, "wb") as prv_file:
-            prv_file.write(private_key)
-        
-        public_key = key.publickey().export_key()
+        try:
+            # Ensure directory exists
+            keys_dir = get_inner_path('keys')
+            os.makedirs(keys_dir, exist_ok=True)
 
-        with open(pub_path, "wb") as pub_file:
-            pub_file.write(public_key)
+            # Generate RSA key pair
+            key = RSA.generate(2048)
 
-        sync_messenger(info="[maica-keys] Keys generated successfully, store with care!", type=MsgType.LOG)
+            private_key = key.export_key()
+            with open(prv_path, "wb") as prv_file:
+                prv_file.write(private_key)
+
+            public_key = key.publickey().export_key()
+            with open(pub_path, "wb") as pub_file:
+                pub_file.write(public_key)
+
+            sync_messenger(
+                info="[maica-keys] Keys generated successfully, store with care!",
+                type=MsgType.LOG
+            )
+
+        except Exception as e:
+            sync_messenger(
+                info=f"[maica-keys] Error generating keys: {str(e)}",
+                type=MsgType.ERROR
+            )
+            raise
+
+    except Exception as e:
+        sync_messenger(
+            info=f"[maica-keys] Error checking keys: {str(e)}",
+            type=MsgType.ERROR
+        )
+        raise
 
 # 使用示例
 if __name__ == "__main__":

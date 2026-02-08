@@ -4,6 +4,7 @@ import bcrypt
 import base64
 import json
 import time
+import os
 import colorama
 from Crypto.Random import random as CRANDOM
 from Crypto.Cipher import PKCS1_OAEP
@@ -26,6 +27,19 @@ def _get_keys() -> tuple[PKCS1_OAEP.PKCS1OAEP_Cipher, PKCS1_OAEP.PKCS1OAEP_Ciphe
     prv_path = get_inner_path('keys/prv.key')
     pub_path = get_inner_path('keys/pub.key')
 
+    # Check if key files exist
+    if not os.path.isfile(prv_path):
+        raise FileNotFoundError(
+            f"Private key file not found: {prv_path}\n"
+            f"Failed to generate keys. Please check file permissions and disk space."
+        )
+
+    if not os.path.isfile(pub_path):
+        raise FileNotFoundError(
+            f"Public key file not found: {pub_path}\n"
+            f"Failed to generate keys. Please check file permissions and disk space."
+        )
+
     with open(prv_path, "r") as privkey_file:
         privkey = privkey_file.read()
     with open(pub_path, "r") as pubkey_file:
@@ -42,6 +56,19 @@ def _get_keys() -> tuple[PKCS1_OAEP.PKCS1OAEP_Cipher, PKCS1_OAEP.PKCS1OAEP_Ciphe
 def _check_keys() -> bool:
     global encryptor, decryptor, verifier, signer
     if not (encryptor and decryptor and verifier and signer):
+        # Check if key files exist
+        prv_path = get_inner_path('keys/prv.key')
+        pub_path = get_inner_path('keys/pub.key')
+
+        if not (os.path.isfile(prv_path) and os.path.isfile(pub_path)):
+            # Key files not found, attempt to generate
+            from maica.initializer.gen_keys import generate_rsa_keys
+            sync_messenger(
+                info="[maica-account] Key files not found, attempting to generate...",
+                type=MsgType.WARN
+            )
+            generate_rsa_keys()
+
         encryptor, decryptor, verifier, signer = _get_keys()
 
 class AccountCursor(AsyncCreator):

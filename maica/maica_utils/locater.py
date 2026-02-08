@@ -14,17 +14,32 @@ def locater():
             is_frozen = locater.__compiled__
         except Exception:
             is_frozen = None
-    
+
     if is_frozen:
+        # Nuitka packaged: try multiple possible base paths
         absolute_path = os.path.abspath(sys.executable)
+        dirname = os.path.dirname(absolute_path)
+
+        # Try multiple possible paths to find keys directory
+        possible_paths = [dirname, os.path.dirname(dirname)]
+
+        found = False
+        for path in possible_paths:
+            if os.path.isdir(os.path.join(path, 'keys')):
+                dirname = path
+                found = True
+                break
+
+        # If keys directory not found, use executable directory
+        # (for first-time key generation)
+        if not found:
+            dirname = possible_paths[0]
     else:
         absolute_path = os.path.abspath(inspect.getfile(locater))
-
-    dirname = os.path.dirname(absolute_path)
-    if not is_frozen:
+        dirname = os.path.dirname(absolute_path)
         for i in range(2):
             dirname = os.path.dirname(dirname)
-    
+
     return is_frozen, dirname
 
 def get_inner_path(filename):
