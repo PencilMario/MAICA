@@ -4,26 +4,19 @@ Some annoying migration stuff here.
 import asyncio
 import importlib
 from typing import *
-from packaging.version import parse
+from packaging.version import parse, Version
 from collections.abc import Callable
 from maica.maica_utils import *
-from maica.initializer import create_marking
+# from maica.initializer import create_marking
+from maica.initializer.migrations.base import get_migrations
+from maica.initializer.migrations import nukita_announcer
 
-available_list: list[tuple[str, Callable]]
+available_list: list[tuple[Version, Callable]]
 
 def pkg_init_migrations():
     global available_list
-    available_list = []
 
-    prio = 0
-    while True:
-        prio += 1
-        modname = f".migration_{prio}"
-        try:
-            mig_module = importlib.import_module(modname, "maica.initializer.migrations")
-            mig_v = parse(mig_module.upper_version); migrate = mig_module.migrate
-            available_list.append((mig_v, migrate))
-        except Exception: break
+    available_list = get_migrations()
 
     sync_messenger(info=f'[maica-mig] {len(available_list)} migrations found', type=MsgType.DEBUG)
 
@@ -55,3 +48,6 @@ def migrate(version):
         sync_messenger(info=f'[maica-mig] No migration applied, continuing launch procedure...', type=MsgType.DEBUG)
 
     return migrated
+
+if __name__ == "__main__":
+    print(parse("1.0") <= parse("1.1") < parse("1.2"))
