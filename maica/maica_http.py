@@ -458,10 +458,12 @@ class ShortConnHandler(View):
             content = valid_data.get('content')
 
             uuid: str = content
+            self.msg_http(info=f'Attempting to download image: {uuid}', type=MsgType.DEBUG)
             processing_img = ProcessingImg(uuid)
 
             return_bio = processing_img.to_bio()
             file_name = processing_img.file_name
+            self.msg_http(info=f'Image loaded successfully: {file_name}', type=MsgType.DEBUG)
 
             return await send_file(
                 return_bio,
@@ -476,6 +478,7 @@ class ShortConnHandler(View):
                 return self.jfy_res(result)
             except Exception as e2:
                 if isinstance(valid_data, dict) and valid_data.get('content'):
+                    self.msg_http(info=f"File not found: {valid_data.get('content')}.jpg", type=MsgType.WARN)
                     raise MaicaInputWarning(f"File {valid_data.get('content')}.jpg not exist", '404') from e
                 else:
                     raise e2

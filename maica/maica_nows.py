@@ -337,10 +337,12 @@ class NoWsCoroutine(AsyncCreator):
 
         processing_img = ProcessingImg(input)
         uuid = processing_img.det_path()
-        
+        await messenger(info=f'Storing image with UUID: {uuid}', type=MsgType.DEBUG)
+
         sql_expression_1 = "INSERT INTO mv_meta (user_id, uuid) VALUES (%s, %s)"
         vista_id = (await self.maica_pool.query_modify(expression=sql_expression_1, values=(self.settings.verification.user_id, uuid)))[1]
         processing_img.save()
+        await messenger(info=f'Image saved successfully: {uuid}', type=MsgType.DEBUG)
 
         return uuid
     
