@@ -150,6 +150,8 @@ MAICA_TP_APIS = '
 
 # Account level behavior settings
 
+# Disable password authentication and auto-create missing authenticated identities
+MAICA_SERVICE_ONLY = '0'
 # Allow new connections to kick old ones or not
 MAICA_KICK_STALE_CONNS = '1'
 # Tries before triggering Fail2Ban

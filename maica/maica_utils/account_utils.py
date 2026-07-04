@@ -83,6 +83,54 @@ class AccountCursor(AsyncCreator):
         if not self.maica_pool:
             self.maica_pool = await ConnUtils.maica_pool()
 
+    def _service_only_enabled(self) -> bool:
+        return G.A.SERVICE_ONLY == '1'
+
+    def _apply_identity(self, account_row, verified=False) -> None:
+        dbres_id, dbres_username, dbres_nickname, dbres_email, _dbres_ecf, _dbres_pwd_bcrypt = account_row
+        targets = [self.settings.identity]
+        if verified:
+            targets.append(self.settings.verification)
+        for target in targets:
+            target.user_id = dbres_id
+            target.username = dbres_username
+            target.nickname = dbres_nickname
+            target.email = dbres_email
+
+    async def _get_account_by_identity(self, identity, is_email):
+        sql_expression = f'SELECT id, username, nickname, email, is_email_confirmed, password FROM users WHERE {"email" if is_email else "username"} = %s'
+        return await self.auth_pool.query_get(expression=sql_expression, values=(identity, ))
+
+    def _derive_service_only_profile(self, identity, is_email) -> tuple[str, str, str]:
+        if is_email:
+            email = identity
+            username = identity.split('@', 1)[0] or identity
+        else:
+            username = identity
+            email = f'{identity}@serviceonly.local'
+        return username, username, email
+
+    async def _create_service_only_account(self, identity, is_email, password=None):
+        username, nickname, email = self._derive_service_only_profile(identity, is_email)
+        password_seed = password.encode('utf-8') if isinstance(password, str) else os.urandom(24)
+        hashed_password = await wrap_run_in_exc(None, bcrypt.hashpw, password_seed, bcrypt.gensalt())
+        sql_expression = 'INSERT INTO users (username, nickname, email, is_email_confirmed, password) VALUES (%s, %s, %s, %s, %s)'
+        _rows, user_id = await self.auth_pool.query_modify(
+            expression=sql_expression,
+            values=(username, nickname, email, 1, hashed_password.decode('utf-8')),
+        )
+        return (user_id, username, nickname, email, 1, hashed_password.decode('utf-8'))
+
+    async def _account_service_only_verify(self, identity, is_email, password=None) -> tuple[bool, Union[str, dict, None]]:
+        try:
+            result = await self._get_account_by_identity(identity, is_email)
+            if not result:
+                result = await self._create_service_only_account(identity, is_email, password)
+            self._apply_identity(result, verified=True)
+            return True, None
+        except Exception as e:
+            return False, e
+
     async def check_user_status(self, pref=False, *args) -> Union[dict, tuple]:
         status = "status" if not pref else "preferences"
         l = []
@@ -126,13 +174,12 @@ class AccountCursor(AsyncCreator):
             raise MaicaDbError(e, '502', f'user_{status}_write_failed') from e
 
     async def _account_pwd_verify(self, identity, is_email, password) -> tuple[bool, Union[str, dict, None]]:
-        sql_expression = f'SELECT id, username, nickname, email, is_email_confirmed, password FROM users WHERE {"email" if is_email else "username"} = %s'
         try:
-            result = await self.auth_pool.query_get(expression=sql_expression, values=(identity, ))
+            result = await self._get_account_by_identity(identity, is_email)
             assert result, "User does not exist"
 
             dbres_id, dbres_username, dbres_nickname, dbres_email, dbres_ecf, dbres_pwd_bcrypt = result
-            self.settings.identity.update(user_id=dbres_id, username=dbres_username, nickname=dbres_nickname, email=dbres_email)
+            self._apply_identity(result)
 
             input_pwd, target_pwd = password.encode(), dbres_pwd_bcrypt.encode()
             vf_result = await wrap_run_in_exc(None, bcrypt.checkpw, input_pwd, target_pwd)
@@ -158,7 +205,7 @@ class AccountCursor(AsyncCreator):
                 else:
                     # We're all good
                     await self.write_user_status(f2b_count=0)
-                    self.settings.verification.update(user_id=dbres_id, username=dbres_username, nickname=dbres_nickname, email=dbres_email)
+                    self._apply_identity(result, verified=True)
                     return True, None
             else:
                 # Password is wrong
@@ -202,7 +249,12 @@ class AccountCursor(AsyncCreator):
         try:
             login_password = login_cridential['password']
         except Exception:
-            raise Exception('No password provided')
+            if self._service_only_enabled():
+                login_password = None
+            else:
+                raise Exception('No password provided')
+        if self._service_only_enabled():
+            return await self._account_service_only_verify(login_identity, login_is_email, login_password)
         return await self._account_pwd_verify(login_identity, login_is_email, login_password)
     
     async def is_banned(self) -> bool:
