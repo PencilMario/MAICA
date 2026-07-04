@@ -20,6 +20,8 @@ import websockets
 
 from typing import *
 from tenacity import *
+from pydantic import BaseModel, model_validator
+from pydantic.dataclasses import dataclass as pdataclass
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from openai.types.chat import ChatCompletionMessage
@@ -91,18 +93,24 @@ class MsgType():
     ERROR = 'error'
 
 class FakeChatCompletion():
-    """A fake OpenAI completion class. Do not use for context."""
-    class Message:
-        def __init__(self, role="assistant", content=""):
-            self.role = role
-            self.content = content
-
-    class Choice:
-        def __init__(self, message):
-            self.message = message
-
+    """
+    A fake OpenAI completion class. Do not use for context.
+    Be cautious that this class simulates Response instead of ChatCompletion since v1.3.
+    """
     def __init__(self, text):
-        self.choices = [self.Choice(self.Message(content=text))]
+        self.output_text = text
+        self.output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": text
+                    }
+                ]
+            }
+        ]
 
 class CommonMaicaException(Exception):
     """This is a common MAICA exception."""
@@ -163,16 +171,19 @@ class MaicaInternetWarning(CommonMaicaWarning):
     """This suggests the backend request action is not behaving normal."""
 
 RETRYABLE_EXCEPTIONS = (
-    aiomysql.OperationalError,
-    aiomysql.InterfaceError,
-    ConnectionError,
-    TimeoutError,
-    httpx.TransportError,
-    openai.APIConnectionError,
-    openai.APITimeoutError,
-    openai.RateLimitError,
-    json.JSONDecodeError,
-    MaicaInternetWarning,
+    # aiomysql.OperationalError,
+    # aiomysql.InterfaceError,
+    # ConnectionError,
+    # TimeoutError,
+    # httpx.TransportError,
+    # openai.APIConnectionError,
+    # openai.APITimeoutError,
+    # openai.RateLimitError,
+    # json.JSONDecodeError,
+    # MaicaInternetWarning,
+
+    # This is too unstable.
+    Exception,
 )
 
 class AsyncCreator(ABC):
@@ -270,7 +281,7 @@ class Combiner():
         return self.str_buffer
 
 class ReUtils():
-    """Do not initialize."""
+    """Just a collection."""
     IS = re.I | re.S
     re_sub_password_spoiler = re.compile(r'"password"\s*:\s*"(.*?)"')
     re_search_sfe_fs = re.compile(r"first_session.*?datetime\(([0-9]*?)\s*,\s*([0-9]*?)\s*,\s*([0-9]*?)\s*,\s*([0-9]*?)\s*,\s*([0-9]*?)\s*,\s*([0-9]*?)\s*,\s*([0-9]*?)\)", re.I)
@@ -309,6 +320,7 @@ class ReUtils():
     re_findall_zh_characters = re.compile(r'([一-龥].*[一-龥])')
     re_sub_multi_spaces = re.compile(r'\s{2,}')
     re_sub_ellipsis = re.compile(r'\.\.\.')
+    re_sub_strip_spaces = re.compile(r"\s*(.*?)\s*$", re.M)
 
 class Decos():
     """Do not initialize."""
@@ -322,8 +334,8 @@ class Decos():
         async def log_retry(retry_state):
             self = retry_state.args[0] if retry_state else None
             rsc = getattr(self, 'rsc', None); name = getattr(self, 'name', 'anon_conn')
-            websocket = rsc.websocket if rsc else None; traceray_id = rsc.traceray_id if rsc else ''
-            await messenger(websocket=websocket, status=f'{name}_temp_failure', info=f'{name} temporary failure, retrying {retry_state.attempt_number} time...', code='304', traceray_id=traceray_id, type=MsgType.WARN)
+            websocket = rsc.websocket if rsc else None; tracker_id = rsc.tracker_id if rsc else ''
+            await messenger(websocket=websocket, status=f'{name}_temp_failure', info=f'{name} temporary failure, retrying {retry_state.attempt_number} time...', code='304', tracker_id=tracker_id, type=MsgType.WARN)
 
         retry_decorator = retry(
             stop=stop_after_attempt(max_attempts),
@@ -364,8 +376,18 @@ class Decos():
             except websockets.WebSocketException as we:
                 raise we
             except Exception as e:
-                exception_cls = MaicaDbError if hasattr(self, 'db') else MaicaResponseError
-                conn_type = 'db_conn' if hasattr(self, 'db') else 'ai_conn'
+
+                match self:
+                    case i if getattr(i, "db_type", None) in ("mysql", "sqlite"):
+                        exception_cls = MaicaDbError
+                        conn_type = 'db_conn'
+                    case i if getattr(i, "db_type", None) in ("milvus",):
+                        exception_cls = MaicaDbError
+                        conn_type = 'vdb_conn'
+                    case _:
+                        exception_cls = MaicaResponseError
+                        conn_type = 'ai_conn'
+
                 raise exception_cls(f'{name} operation failed: {str(e)}', '502', f'{conn_type}_failed') from e
         return wrapper
 
@@ -434,6 +456,77 @@ class Decos():
                 raise MaicaInputError(f'Input param not acceptable', '500', 'maica_settings_param_rejected') from e
         return wrapper
 
+class ExplainUrl():
+    """For convenience."""
+    def __init__(self, url):
+        parse_result = urlparse(url)
+        self.scheme, self.netloc, self.path, self.params, self.query, self.fragment = parse_result
+        self.hostname, self.port = parse_result.hostname, parse_result.port
+        self.is_url = bool(self.netloc); self.is_local = not self.is_url
+        if not self.port:
+            match self.scheme:
+                case "http":
+                    self.port = 80
+                case "https":
+                    self.port = 443
+                case "ftp":
+                    self.port = 21
+                case "ssh":
+                    self.port = 22
+
+@pdataclass
+class BilingualText():
+    """Should we call it trilingual?"""
+    zh: str = ""
+    en: Optional[str] = None
+    auto: Optional[str] = None
+
+    @model_validator(mode="after")
+    def auto_fill(self):
+        if self.en is None:
+            self.en = self.zh
+        if self.auto is None:
+            self.auto = self.en
+
+    def __bool__(self):
+        return bool(self.zh or self.en or self.auto)
+
+    def __str__(self):
+        return self.zh
+    
+    def __add__(self, other):
+        if isinstance(other, str):
+            return self.__class__(
+                zh = self.zh + other,
+                en = self.en + other,
+                auto = self.auto + other,
+            )
+        else:
+            return self.__class__(
+                zh = self.zh + other.zh,
+                en = self.en + other.en,
+                auto = self.auto + other.auto,
+            )
+    
+    def __iadd__(self, other):
+        if isinstance(other, str):
+            self.zh += other
+            self.en += other
+            self.auto += other
+        else:
+            self.zh += other.zh
+            self.en += other.en
+            self.auto += other.auto
+        return self
+    
+    def to_str(self, target_lang: Literal['zh', 'en', 'auto']='zh') -> str:
+        if target_lang == 'zh':
+            return self.zh
+        elif target_lang == 'en':
+            return self.en
+        else:
+            return self.auto
+
 @dataclass
 class Desc():
     """Just a description."""
@@ -465,14 +558,14 @@ def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) 
     output.update(kwargs)
     return json.dumps(output, ensure_ascii=deformation)
 
-def ellipsis_str(input: any, limit=80) -> str:
+def ellipsis_str(input: Any, limit=80) -> str:
     """It converts anything to str and ellipsis it."""
     text = str(input)
     if len(text) > limit:
         text = text[:limit] + '...'
     return text
 
-def ellipsis_large_str(input: any, limit=600) -> str:
+def ellipsis_large_str(input: Any, limit=600) -> str:
     """It converts anything large to str and ellipsis it."""
     text = str(input)
     if len(text) > limit:
@@ -578,7 +671,7 @@ def proceed_common_text(text: str, is_json=False) -> Union[str, list, dict]:
     return answer_fin
 
 @overload
-async def messenger(websocket=None, status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> None: ...
+async def messenger(websocket=None, status='', info='', code='0', tracker_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> None: ...
 
 async def messenger(websocket=None, *args, **kwargs) -> None:
     """Together with websocket.send()."""
@@ -586,7 +679,7 @@ async def messenger(websocket=None, *args, **kwargs) -> None:
     if websocket and ws_tuple:
         await websocket.send(wrap_ws_formatter(*ws_tuple))
 
-def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> tuple:
+def sync_messenger(status='', info='', code='0', tracker_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> tuple:
     """It could handle most log printing and exception raising jobs pretty automatically."""
     try:
         term_v = os.get_terminal_size().columns
@@ -626,12 +719,12 @@ def sync_messenger(status='', info='', code='0', traceray_id='', error: Optional
         msg_print += f"[{time.strftime('%Y-%m-%d %H:%M:%S')}]" if add_time else ''; msg_print += f"-[{str(code)}]" if code else ''
         msg_print = msg_print.ljust(40)
         msg_print += f": {str(info)}" if not str(info).startswith('\n') else f"{'-=' * rep1}{str(info)}\n{'-=' * rep2}"
-        msg_print += f"; traceray ID {traceray_id}" if traceray_id else ''
+        msg_print += f"; traceray ID {tracker_id}" if tracker_id else ''
         msg_send = info
         if type == 'error' and int(G.A.NO_SEND_ERROR):
             msg_send = "A critical exception happened serverside, contact administrator"
-        if traceray_id and isinstance(info, str):
-            msg_send += f" -- your traceray ID is {traceray_id}"
+        if tracker_id and isinstance(info, str):
+            msg_send += f" -- your traceray ID is {tracker_id}"
 
     frametrack_dict = {"error": 99, "warn": 1}
     if type in frametrack_dict:
@@ -696,7 +789,7 @@ async def wrap_run_in_exc(loop, func, *args, **kwargs) -> any:
     result = await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
     return result
 
-def limit_length(col: list, limit: int) -> list:
+def limit_length[T](col: list[T], limit: int) -> list[T]:
     return random.sample(col, limit) if limit < len(col) else col
 
 async def dld_json(url, use_proxy=True, ua_disguise=False, method='get', carriage=None) -> json:
@@ -727,24 +820,6 @@ def numeric(num: str) -> Union[int, float]:
         return int(num)
     except ValueError:
         return float(num)
-
-def get_host(url: str) -> bool:
-    """Try to get protocol, hostname and port from url."""
-    try:
-        url_parsed = urlparse(url)
-        default_port = None
-        match url_parsed.scheme:
-            case 'http':
-                default_port = 80
-            case 'https':
-                default_port = 443
-        return url_parsed.scheme, url_parsed.hostname, url_parsed.port or default_port
-    except Exception:
-        return False
-
-def vali_url(url: str) -> bool:
-    """urllib is dumb. It doesn't recognize ip addr so we make it brutal."""
-    return '.' in url
 
 def vali_date(y, m, d) -> tuple[int, int, int]:
     """What a pun!"""
@@ -813,15 +888,112 @@ def try_getattr(o, *names) -> Optional[any]:
             break
     return res
 
+def beautify_time(dt: datetime.time, target_lang: Literal['zh', 'en', 'auto'] = 'zh', include_adj = True):
+    """
+    Beautifies current time. No date.
+
+    - dt: datetime object, time should be enough
+    - target_lang: you know, effectiveless if not include_adj
+    - include_adj: include adjective, like dawn or morning or what
+    """
+    _Bt = BilingualText
+
+    match time:
+        case time if time.hour < 4:
+            time_range = _Bt('半夜', ' at midnight')
+        case time if 4 <= time.hour < 6:
+            time_range = _Bt('凌晨', ' before dawn')
+        case time if 6 <= time.hour < 8:
+            time_range = _Bt('早上', ' at dawn')
+        case time if 8 <= time.hour < 11:
+            time_range = _Bt('上午', ' in morning')
+        case time if 11 <= time.hour < 13:
+            time_range = _Bt('中午', ' at noon')
+        case time if 13 <= time.hour < 18:
+            time_range = _Bt('下午', ' in afternoon')
+        case time if 18 <= time.hour < 23:
+            time_range = _Bt('晚上', ' at night')
+        case time if 23 <= time.hour:
+            time_range = _Bt('深夜', ' at midnight')
+
+    if include_adj:
+        time_friendly = f"{time_range.zh}{time:%H:%M:%S}" if target_lang == 'zh' else f"{time:%H:%M:%S}{time_range.en}"
+    else:
+        time_friendly = f"{time:%H:%M:%S}"
+
+    return time_friendly
+
+def beautify_date(dt: datetime.date, target_lang: Literal['zh', 'en', 'auto'] = 'zh', hemisphere: Literal['N', 'S'] = 'N', include_adj = True):
+    """
+    Beautifies current date. No time.
+    
+    - dt: datetime object, date should be enough
+    - target_lang: you know
+    - hemisphere: it affects season, effectiveless if not include_adj
+    - include_adj: include adjective, like spring or Monday or what
+    """
+    _Bt = BilingualText
+
+    sp = _Bt("春季", "spring")
+    su = _Bt("夏季", "summer")
+    au = _Bt("秋季", "autumn")
+    wi = _Bt("冬季", "winter")
+
+    if hemisphere == 'S':
+        match dt.month:
+            case m if 3 <= m < 6:
+                season = au
+            case m if 6 <= m < 9:
+                season = wi
+            case m if 9 <= m < 12:
+                season = sp
+            case _:
+                season = su
+        sh = _Bt("(南半球)", "(South hemisphere)")
+    else:
+        match m:
+            case m if 3 <= m < 6:
+                season = sp
+            case m if 6 <= m < 9:
+                season = su
+            case m if 9 <= m < 12:
+                season = au
+            case _:
+                season = wi
+        sh = ''
+
+    season += sh
+
+    weeklist = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    weekday_zh = weeklist[dt.weekday()]
+
+    if include_adj:
+        date_friendly = f"{dt.year}年{season.zh}{dt.month}月{dt.day}日, {weekday_zh}" if target_lang == 'zh' else f"{dt:%d %B, %A, %Y} {season.en}"
+    else:
+        date_friendly = f"{dt.year}年{dt.month}月{dt.day}日" if target_lang == 'zh' else f"{dt:%d %B, %Y}"
+
+    return date_friendly
+
 async def hash_sha256(str) -> str:
     """Get SHA256 for a string."""
     def hash_sync(str):
         return hashlib.new('sha256', str).hexdigest()
     return await wrap_run_in_exc(None, hash_sync, str)
 
-def is_mcore_vl() -> bool:
+def is_mcore_vl():
     """If mcore is same model with mvista."""
-    return G.A.MCORE_ADDR == G.A.MVISTA_ADDR and G.A.MCORE_CHOICE == G.A.MVISTA_CHOICE
+    return bool(G.A.MCORE_ADDR == G.A.MVISTA_ADDR and G.A.MCORE_CHOICE == G.A.MVISTA_CHOICE)
+
+def is_rag_enabled():
+    """If this server instance could utilize RAG."""
+    return bool(G.A.EMBEDDING_ADDR and G.A.MILVUS_ADDR)
+
+def to_str(obj: str | BilingualText, target_lang: Literal['zh', 'en', 'auto']='zh'):
+    """Call to_str if bt, else as-is."""
+    if isinstance(obj, BilingualText):
+        return obj.to_str(target_lang)
+    else:
+        return obj
 
 def sysstruct() -> Literal['Windows', 'Linux']:
     sysstruct = platform.system()
@@ -832,7 +1004,6 @@ if __name__ == "__main__":
     async def test():
         from maica import init
         init()
-        host_info = get_host(G.A.MCORE_ADDR)
         res = await dld_json(f"https://zh.wikipedia.org/w/api.php?action=query&format=json&list=search&redirects=1&utf8=1&formatversion=2&srsearch=incategory:各时期火山事件&srnamespace=14&srlimit=250&sroffset=0&srprop=", True)
         print(res)
 

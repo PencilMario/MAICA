@@ -32,7 +32,7 @@ class NoWsCoroutine(AsyncCreator):
         self.auth_pool = fsc.auth_pool
         self.maica_pool = fsc.maica_pool
         self.websocket = fsc.websocket
-        self.traceray_id = fsc.traceray_id
+        self.tracker_id = fsc.tracker_id
         self.settings = fsc.maica_settings
         self.sessions: Dict[int, MaicaSession] = {}
         self.remote_addr = None
@@ -43,29 +43,6 @@ class NoWsCoroutine(AsyncCreator):
     def _check_essentials(self) -> None:
         if not self.settings.verification.user_id:
             raise MaicaPermissionError('Essentials not complete', '403', 'common_essentials_missing')
-
-    # Here we have V2 session methods
-    def acquire_session(self, session_num) -> MaicaSession | List[MaicaSessionItem]:
-        self._check_essentials()
-        session_num = int(session_num)
-        assert -1 <= session_num < 10, "Determined session_num out of range"
-
-        # Ensure it exists in index
-        if not session_num in self.sessions.keys():
-            self.sessions[session_num] = MaicaSession()
-            session = self.sessions[session_num]
-
-        match session_num:
-            case -1 | 0:
-                # Disposable sessions
-                session.clear()
-                return session
-            case _:
-                # Persistent sessions
-                session.user_id = self.settings.verification.user_id
-                session.session_num = session_num
-                session.fsc = self.fsc
-                return session
 
     async def find_ms_cache(self, hash: str) -> Optional[str]:
         """Find ms cache with corresponding prompt hash."""
@@ -109,7 +86,7 @@ class NoWsCoroutine(AsyncCreator):
         
         for uuid in uuids:
             processing_img = ProcessingImg()
-            processing_img.det_path(uuid)
+            processing_img.uuid = uuid
 
             sql_expression_1 = "SELECT vista_id FROM mv_meta WHERE user_id = %s AND uuid = %s"
             result = await self.maica_pool.query_get(expression=sql_expression_1, values=(self.settings.verification.user_id, uuid))
@@ -137,7 +114,7 @@ class NoWsCoroutine(AsyncCreator):
         await delete_mv_if_exceeds()
 
         processing_img = ProcessingImg(input)
-        uuid = processing_img.det_path()
+        uuid = processing_img.gen_uuid()
         await messenger(info=f'Storing image with UUID: {uuid}', type=MsgType.DEBUG)
 
         sql_expression_1 = "INSERT INTO mv_meta (user_id, uuid) VALUES (%s, %s)"
@@ -188,10 +165,10 @@ class NoWsCoroutine(AsyncCreator):
                         self.settings.verification.reset()
                         raise MaicaConnectionWarning('A connection was established already and kicking not enabled', '406', 'maica_connection_reuse_denied')
                     else:
-                        await messenger(self.websocket, "maica_connection_reuse_attempt", "A connection was established already", "300", self.traceray_id)
+                        await messenger(self.websocket, "maica_connection_reuse_attempt", "A connection was established already", "300", self.tracker_id)
                         stale_fsc, stale_lock = online_dict[self.settings.verification.user_id]
                         try:
-                            await messenger(stale_fsc.rsc.websocket, 'maica_connection_reuse_stale', 'A new connection has been established', '300', stale_fsc.rsc.traceray_id)
+                            await messenger(stale_fsc.rsc.websocket, 'maica_connection_reuse_stale', 'A new connection has been established', '300', stale_fsc.rsc.tracker_id)
                             await stale_fsc.rsc.websocket.close(1000, 'Displaced as stale')
                         except Exception:
                             await messenger(None, 'maica_connection_stale_dead', 'The stale connection has died already', '204')

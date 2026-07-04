@@ -1,0 +1,55 @@
+I'm sorry for not offering an English ver of this document but it's just too much work for me.
+If you want to read in English, use a translator.
+
+= 更新会话管理到v2
+
++ 添加MVista的native实现(需要核心模型支持vl)
+
+= 更改部分高级设置命名:
+    = sfe_aggressive -> prompt_pname_repl
+    = mf_aggressive -> mf_llm_concl
+    = tnd_aggressive -> mf_const_tools
+    = esc_aggressive -> esearch_llm_concl
+    = amt_aggressive -> mf_precheck_mt
+    = pre_additive -> mf_context_rnds
+    = post_additive -> mt_context_rnds
+    = dscl_pvn -> gen_quality_chk
+    = pre_astp -> mf_disable_loop
+    = post_astp -> mt_disable_loop
+    = enforce_lang -> gen_enforce_lang
+
+= tz移动到常规设置
+
++ 添加RAG和embedding基建
+
++ 添加语言auto的支持
+
++ 添加高级设置mf_sf_access_impl
+
++ 添加高级设置mt_concl_memory
+
++ 现在发送maica_mcore_gen_start标记断点续传介入
+
+- 弃用mas_hf_hcb
+
+= affection trigger的参数键改为alter_value
+
++ 添加高级设置mf_const_sf_access
+
+= mt_disable_loop默认变为True
+
+= traceray_id更名为tracker_id
+
+- 弃用mf_const_tools == 3
+
+= 现在serp采用标准数据模型
+
+= sf_extraction更名为savefile_access
+
+- 弃用mt_extraction
+
+= max_length更名为session_len_limit, 上限改回28672
+
+= MPostal ic_prep更名为twk_super
+
+= legality接口查询地址现在返回经纬度

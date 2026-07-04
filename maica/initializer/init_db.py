@@ -1,3 +1,7 @@
+"""
+Do not add future inits here, since it's actually migration_0. Make new migs instead.
+"""
+
 import asyncio
 import os
 from typing import *
@@ -5,10 +9,10 @@ from maica.maica_utils import *
 
 async def create_tables():
 
-    AUTH_DB = load_env('MAICA_AUTH_DB')
-    MAICA_DB = load_env('MAICA_DATA_DB')
+    AUTH_DB = G.A.AUTH_DB
+    MAICA_DB = G.A.DATA_DB
 
-    basic_pool: DbPoolManager = await ConnUtils.basic_pool()
+    basic_pool = await ConnUtils.basic_pool()
     auth_created = False
 
     if basic_pool:
@@ -26,10 +30,10 @@ async def create_tables():
             sync_messenger(info=f"[maica-db] AUTH_DB {AUTH_DB} exists, skipping...", type=MsgType.WARN)
 
         if not MAICA_DB in curr_dbs:
-            sync_messenger(info=f"[maica-db] MAICA_DB {MAICA_DB} does not exist, creating...", type=MsgType.DEBUG)
+            sync_messenger(info=f"[maica-db] DATA_DB {MAICA_DB} does not exist, creating...", type=MsgType.DEBUG)
             await basic_pool.query_modify(f"CREATE DATABASE IF NOT EXISTS {MAICA_DB}")
         else:
-            sync_messenger(info=f"[maica-db] MAICA_DB {MAICA_DB} exists, skipping...", type=MsgType.WARN)
+            sync_messenger(info=f"[maica-db] DATA_DB {MAICA_DB} exists, skipping...", type=MsgType.WARN)
     elif not os.path.exists(get_inner_path(AUTH_DB)):
         auth_created = True
 
@@ -230,10 +234,12 @@ END;
         sync_messenger(info="\n[maica-db] Warning: AUTH_DB was not created by MAICA, so we're not writing anything for security reason.\nPlease manually make sure AUTH_DB is already ready for authentication, or delete at your own risk.", type=MsgType.WARN)
 
     for table in maica_tables:
-        sync_messenger(info="[maica-db] Adding table to MAICA_DB...", type=MsgType.DEBUG)
+        sync_messenger(info="[maica-db] Adding table to DATA_DB...", type=MsgType.DEBUG)
         await maica_pool.query_modify(table)
 
     sync_messenger(info="[maica-db] MAICA databse initialization finished", type=MsgType.LOG)
 
 if __name__ == "__main__":
+    from maica import init
+    init()
     asyncio.run(create_tables())

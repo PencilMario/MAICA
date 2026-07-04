@@ -18,12 +18,21 @@ from maica.maica_ws import NoWsCoroutine
 from maica.maica_utils import *
 from maica.mtools import *
 
-_CONNS_LIST = ['auth_pool', 'maica_pool', 'mnerve_conn']
+_CONNS_LIST = [
+    'auth_pool',
+    'maica_pool',
+    'vector_pool',
+    'mnerve_conn',
+    'embedding_conn',
+    # Reranking is not required here
+]
 _WATCHES_DICT = {
     "mcore": "MCORE_ADDR",
     "mfocus": "MFOCUS_ADDR",
     "mvista": "MVISTA_ADDR",
     "mnerve": "MNERVE_ADDR",
+    "embedding": "EMBEDDING_ADDR",
+    "reranking": "RERANKING_ADDR",
 }
 
 def pkg_init_maica_http():
@@ -93,7 +102,7 @@ class ShortConnHandler(View):
     stem_inst: Optional[NoWsCoroutine]
 
     root_csc: ConnSocketsContainer = None
-    """Don't forget to implement at first!"""
+    """Don't forget to fill at first!"""
 
     nvwatchers: list[NvWatcher] = []
 
@@ -253,10 +262,11 @@ class ShortConnHandler(View):
 
         chat_session = valid_data.get('chat_session')
         assert 1 <= chat_session < 10, "chat_session out of bound"
+        self.settings.temp.update(chat_session=chat_session)
         rounds = int(valid_data.get('content', 0))
 
-        session = self.stem_inst.acquire_session(chat_session)
-        await session.from_db()
+        async with acquire_session(self.fsc) as session:
+            await session.from_db()
         history_json = session.json()
 
         if history_json:
@@ -285,14 +295,15 @@ class ShortConnHandler(View):
 
         chat_session = valid_data.get('chat_session')
         assert 1 <= chat_session < 10, "chat_session out of bound"
+        self.settings.temp.update(chat_session=chat_session)
         content = valid_data.get('content')
 
         sigb64, history_json = content
         assert (await wrap_run_in_exc(None, verify_message, json.dumps(history_json, ensure_ascii=False, sort_keys=True), sigb64)), "Signature mismatch"
 
-        session = self.stem_inst.acquire_session(chat_session)
-        session.load(history_json)
-        session.to_db()
+        async with acquire_session(self.fsc) as session:
+            session.load(history_json)
+            session.to_db()
 
         return self.jfy_res()
 
@@ -407,8 +418,8 @@ class ShortConnHandler(View):
             assert object and value, 'Empty in input'
             match object:
                 case 'geolocation':
-                    res = await weather_api_get(value)
-                    result = res
+                    weather = await weather_api_get(value)
+                    result = weather.geoloc.model_dump()
 
                 case _:
                     raise MaicaInputWarning(f"'{object}' is not valid object")
@@ -423,7 +434,7 @@ class ShortConnHandler(View):
         content = json.loads(valid_data.get('content'))
 
         proc_type: Literal['norm', 'add'] = content.get('type') or 'norm'
-        proc_lang: Literal['zh', 'en'] = content.get('target_lang') or 'zh'
+        proc_lang: Literal['zh', 'en', 'auto'] = content.get('target_lang') or 'zh'
         emo = content.get('text')
         
         if proc_type == 'norm':
@@ -538,7 +549,7 @@ async def prepare_thread(**kwargs):
     # Construct watchers
     watch_addrs = {}
     for k, v in _WATCHES_DICT.items():
-        host = get_host(getattr(G.A, v))[1]
+        host = ExplainUrl(getattr(G.A, v)).hostname
         if host and not k in watch_addrs:
             watch_addrs[k] = host
             

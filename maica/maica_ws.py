@@ -9,12 +9,17 @@ import colorama
 
 from typing import *
 from dataclasses import asdict
+from openai import AsyncStream
+from openai.types.responses import Response, ResponseStreamEvent
 
 from maica import mtools
 from maica.maica_nows import NoWsCoroutine
 from maica.maica_utils import *
 
-_CONNS_LIST = ['auth_pool', 'maica_pool', 'mcore_conn', 'mfocus_conn', 'mvista_conn', 'mnerve_conn']
+_CONNS_LIST = [
+    'auth_pool', 'maica_pool', 'vector_pool',
+    'mcore_conn', 'mfocus_conn', 'mvista_conn', 'mnerve_conn', 'embedding_conn', 'reranking_conn',
+]
 
 async def drain_buffer(websocket, id: int):
     """Drains a buffer and send through ws."""
@@ -99,7 +104,7 @@ class WsCoroutine(NoWsCoroutine):
             try:
 
                 # Initiation
-                self.traceray_id.rotate()
+                self.tracker_id.rotate()
                 self.settings.identity.reset()
                 self.settings.verification.reset()
 
@@ -164,7 +169,8 @@ class WsCoroutine(NoWsCoroutine):
         # Starting loop from here
         while True:
             try:
-                self.traceray_id.rotate()
+                # Pre-utilize cleanups
+                self.tracker_id.rotate()
                 self.settings.temp.reset()
 
                 # Context security check first
@@ -220,6 +226,10 @@ class WsCoroutine(NoWsCoroutine):
                     await messenger(websocket, 'maica_loop_warn_finished', 'Loop hit a user level exception, stopped and reset', '304')
                     continue
 
+            # Do some final cleanups shall we
+            finally:
+                self.fsc.session = None
+
     # Param setting section
     async def change_settings(self, recv_loaded_json: dict):
 
@@ -231,7 +241,7 @@ class WsCoroutine(NoWsCoroutine):
             if recv_loaded_json.get('reset'):
                 self.settings.soft_reset()
             
-            accepted_params = self.settings.update(**chat_params)
+            accepted_params = self.settings.update_settings(**chat_params)
             await messenger(websocket, 'maica_params_accepted', f"{accepted_params} out of {len(chat_params)} settings accepted", "200")
         
         # Handle input errors here
@@ -250,286 +260,284 @@ class WsCoroutine(NoWsCoroutine):
         replace_generation = ''
         ms_cache_identity = ''
 
-        # Param assertions here
+        # Acquiring session
         chat_session = int(default(recv_loaded_json.get('chat_session'), 0))
-        session = self.acquire_session(chat_session)
         self.settings.temp.update(chat_session=chat_session)
+        async with acquire_session(self.fsc) as session:
+            self.fsc.session = session
 
-        # This needs chat_session to function
-        await self.reset_auxiliary_inst()
+            # This needs chat_session to function
+            await self.reset_auxiliary_inst()
 
-        if 'reset' in recv_loaded_json:
-            if recv_loaded_json['reset']:
-                session.clear()
-                await session.to_db()
-                await messenger(websocket, "maica_session_reset", "Determined chat_session reset", "204", self.traceray_id)
-                return
+            # Begin query types
+            if 'reset' in recv_loaded_json:
+                if recv_loaded_json['reset']:
+                    session.clear()
+                    await session.to_db()
+                    await messenger(websocket, "maica_session_reset", "Determined chat_session reset", "204", self.tracker_id)
+                    return
 
-        if 'vision' in recv_loaded_json:
-            if recv_loaded_json['vision']:
-                if isinstance(recv_loaded_json['vision'], str):
-                    recv_loaded_json['vision'] = [recv_loaded_json['vision']]
-                if isinstance(recv_loaded_json['vision'], list):
-                    self.settings.temp.update(mv_imgs=recv_loaded_json['vision'])
+            if 'vision' in recv_loaded_json:
+                if recv_loaded_json['vision']:
+                    if isinstance(recv_loaded_json['vision'], str):
+                        recv_loaded_json['vision'] = [recv_loaded_json['vision']]
+                    if isinstance(recv_loaded_json['vision'], list):
+                        self.settings.temp.update(mv_imgs=recv_loaded_json['vision'])
 
-        if 'inspire' in recv_loaded_json and not query_in:
-            if recv_loaded_json['inspire']:
-                maica_assert(0 <= chat_session < 10, "chat_session")
-                if isinstance(recv_loaded_json['inspire'], dict):
-                    query_insp = await mtools.make_inspire(title_in=recv_loaded_json['inspire'], target_lang=self.settings.basic.target_lang)
-                else:
-                    query_insp = await mtools.make_inspire(target_lang=self.settings.basic.target_lang)
-                if recv_loaded_json.get('use_cache') and self.settings.temp.chat_session == 0:
-                    self.settings.temp.update(ms_cache=True)
-                self.settings.temp.update(bypass_mf=True, bypass_mt=True)
-
-                if self.settings.temp.ms_cache:
-                    self.settings.temp.update(bypass_sup=True)
-                    ms_cache_identity = query_insp[1]
-                    cache_insp = await self.find_ms_cache(ms_cache_identity)
-                    if cache_insp:
-                        self.settings.temp.update(bypass_gen=True)
-                        replace_generation = cache_insp
-                        
-                query_in = query_insp[0]
-
-        if 'postmail' in recv_loaded_json and not query_in:
-            if recv_loaded_json['postmail']:
-                maica_assert(0 <= chat_session < 10, "chat_session")
-                if isinstance(recv_loaded_json['postmail'], dict):
-                    query_insp = await mtools.make_postmail(**recv_loaded_json['postmail'], fsc=self.fsc)
-                    # We're using the old school way to avoid using eval()
-                    if default(recv_loaded_json['postmail'].get('bypass_mf'), True):
-                        self.settings.temp.update(bypass_mf=True)
-                    if default(recv_loaded_json['postmail'].get('bypass_mt'), True):
-                        self.settings.temp.update(bypass_mt=True)
-                    if default(recv_loaded_json['postmail'].get('bypass_stream'), True):
-                        self.settings.temp.update(bypass_stream=True)
-                    if default(recv_loaded_json['postmail'].get('ic_prep'), True):
-                        self.settings.temp.update(ic_prep=True)
-                    if not default(recv_loaded_json['postmail'].get('strict_conv'), False):
-                        self.settings.temp.update(strict_conv=False)
-                elif isinstance(recv_loaded_json['postmail'], str):
-                    query_insp = await mtools.make_postmail(content=recv_loaded_json['postmail'], fsc=self.fsc)
-                    self.settings.temp.update(bypass_stream=True, ic_prep=True, strict_conv=False)
-                else:
-                    maica_assert(False, "postmail")
-                
-                query_in = query_insp
-
-        if not query_in:
-            maica_assert(recv_loaded_json.get('query'), 'query')
-            query_in = recv_loaded_json['query']
-
-        if G.A.CENSOR_QUERY != '0':
-            tolerance = int(G.A.CENSOR_QUERY)
-            query_censor = await mtools.has_censored(query_in)
-            if len(query_censor) >= tolerance:
-                sync_messenger(info=f"Query has censored words: {query_censor}", type=MsgType.DEBUG)
-                raise MaicaInputWarning("Input query has censored words or phrases", "403", "maica_input_query_censored")
-            
-            elif len(query_censor):
-                sync_messenger(info=f"Input query has censored words or phrases but ignored: {query_censor}", type=MsgType.DEBUG)
-
-        if 'savefile' in recv_loaded_json:
-            if self.settings.basic.sf_extraction:
-                self.sf_inst.add_extra(**recv_loaded_json['savefile'])
-            else:
-                self.settings.temp.update(sf_extraction_once=True)
-                self.sf_inst.use_only(**recv_loaded_json['savefile'])
-        if 'trigger' in recv_loaded_json:
-            if self.settings.basic.mt_extraction:
-                self.mt_inst.add_extra(*recv_loaded_json['trigger'])
-            else:
-                self.settings.temp.update(mt_extraction_once=True)
-                self.mt_inst.use_only(recv_loaded_json['trigger'])
-
-        match int(self.settings.temp.chat_session):
-            case -1:
-                maica_assert(isinstance(query_in, (str, list)), 'query')
-                # chat_session == -1 means query contains an entire chat history(sequence mode)
-                session_type = -1
-                session.load(query_in)
-                query_in = session[-1].content
-
-                if len(session) > 10:
-                    raise MaicaInputWarning('Sequence exceeded 10 rounds for chat_session -1', '413', 'maica_sequence_rounds_exceeded')
-                
-                context = {
-                    "target_lang": self.settings.basic.target_lang,
-                }
-                session[-1].context.update(context)
-
-            case i if 0 <= i < 10:
-                maica_assert(isinstance(query_in, str), 'query')
-                # chat_session == 0 means single round, else normal
-                session_type = 0 if i == 0 else 1
-
-                if session_type:
-                    await session.from_db()
-
-                if self.settings.basic.enable_mf and not self.settings.temp.bypass_mf:
-                    knwon_info = await self.mfocus_coro.agenting(query_in)
-                else:
-                    knwon_info = ""
-
-                player_name = '[player]'
-                if self.settings.extra.sfe_aggressive:
-                    player_name_get = self.sf_inst.read_from_sf('mas_playername')
-                    if player_name_get:
-                        player_name = player_name_get
-                        if known_info:
-                            known_info = ReUtils.re_sub_player_name.sub(player_name, known_info)
-
-                session.append(MaicaSessionItem("user", query_in))
-                context = {
-                        "target_lang": self.settings.basic.target_lang,
-                        "strict_conv": self.settings.temp.strict_conv,
-                        "player_name": player_name,
-                        "nsfw_acceptive": self.settings.extra.nsfw_acceptive,
-                        "known_info": knwon_info,
-                        "image_urls": self.settings.temp.mv_imgs if is_mcore_vl() else [],
-                    }
-                session[-1].context.update(context)
-
-            case _:
-                raise MaicaInputError("Using an out of bound session")
-
-        # Construction part done, communication part started
-        # Notice: always do write response_format to override ability if must be text
-        completion_args = {
-            "messages": session.utilize(),
-            "stream": self.settings.basic.stream_output,
-            "stop": ['<|im_end|>', '<|endoftext|>'],
-            "response_format": {"type": "text"},
-            "extra_body": {},
-        }
-        
-        if not self.settings.temp.bypass_sup:
-            completion_args.update(dict(self.settings.super))
-        else:
-            completion_args.update(self.settings.super.default())
-
-        if self.settings.temp.bypass_stream:
-            completion_args['stream'] = False
-
-        if self.settings.temp.ic_prep:
-            completion_args['presence_penalty'] = 1.0 - (1.0 - completion_args['presence_penalty']) * (2/3)
-
-        if self.settings.extra.enforce_lang:
-            if self.settings.basic.target_lang == 'en':
-                completion_args['extra_body']["structured_outputs"] = {"regex": r"^[^\u4e00-\u9fa5]*$"}
-
-        # Add context log
-        previous_rnds = session.utilize(text_only=True)[1:-1]
-        previous_rnds_len = int(len(previous_rnds) / 2)
-        previous_rnds_ellipsed = previous_rnds[-6:]
-        previous_rnds_str = '\n'.join([(('Q: ' if d['role'] == 'user' else 'A: ') + d['content']) for d in previous_rnds_ellipsed])
-        if previous_rnds_len > 3:
-            previous_rnds_str = '... ...\n' + previous_rnds_str
-        if previous_rnds_len:
-            await messenger(info=f'\nQuery has {previous_rnds_len} rounds of history:\n{previous_rnds_str}\nEnd of query history', type=MsgType.RECV)
-
-        await messenger(info=f'\nQuery constrcted and ready to go, last input is:\n{query_in}\nSending query...', type=MsgType.PRIM_RECV)
-
-        # We're about to start generation, so any ws interrupts should be handled by buffered_messenger from now.
-        buffered_messenger = BufferedMessenger(self.settings.verification.user_id)
-
-        pprt = True if completion_args['stream'] else False
-        if recv_loaded_json.get('pprt') != None:
-            pprt = recv_loaded_json['pprt']
-        pprt_processor = mtools.PPRTProcessor(pprt, self.settings.basic.target_lang, self.fsc.mnerve_conn)
-
-        if not self.settings.temp.bypass_gen or not replace_generation: # They should present together
-
-            # Generation here
-            resp = await self.fsc.mcore_conn.make_completion(**completion_args)
-            reply_appended = ''; seq = 0
-
-            if completion_args['stream']:
-                async for chunk in resp:
-                    if not chunk.choices: continue
-                    token = chunk.choices[0].delta.content
-                    if token:
-                        await asyncio.sleep(0)
-                        token = ReUtils.re_sub_replacement_chr.sub('', token)
-
-                        sentence: Optional[str] = await pprt_processor.store_and_split(token)
-                        if sentence:
-                            await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
-                            reply_appended += sentence
-                            seq += 1
-
-                # Exhaust pprtp on completion finish
-                sentences: list[str] = await pprt_processor.exaust_and_split()
-                for sentence in sentences:
-                    await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
-                    reply_appended += sentence
-                    seq += 1
-
-                sync_messenger(info='\n', type=MsgType.PLAIN)
-                await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', traceray_id=self.traceray_id)
-            else:
-                reply = resp.choices[0].message.content
-
-                sentences: list[str] = await pprt_processor.exaust_and_split(reply)
-                for sentence in sentences:
-                    if len(sentences) == 1:
-                        await buffered_messenger(websocket, 'maica_core_nostream_reply', sentence, '200')
+            if 'inspire' in recv_loaded_json and not query_in:
+                if recv_loaded_json['inspire']:
+                    maica_assert(0 <= chat_session < 10, "chat_session")
+                    if isinstance(recv_loaded_json['inspire'], dict):
+                        query_insp = await mtools.make_inspire(title_in=recv_loaded_json['inspire'], target_lang=self.settings.basic.target_lang)
                     else:
-                        await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
-                    reply_appended += sentence
-                    seq += 1
+                        query_insp = await mtools.make_inspire(target_lang=self.settings.basic.target_lang)
+                    if recv_loaded_json.get('use_cache') and self.settings.temp.chat_session == 0:
+                        self.settings.temp.update(ms_cache=True)
+                    self.settings.temp.update(bypass_mf=True, bypass_mt=True)
 
-                if len(sentences) == 1:
-                    await buffered_messenger(None, 'maica_core_complete', f'Reply sent with seed {completion_args['seed']} for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+                    if self.settings.temp.ms_cache:
+                        self.settings.temp.update(bypass_sup=True)
+                        ms_cache_identity = query_insp[1]
+                        cache_insp = await self.find_ms_cache(ms_cache_identity)
+                        if cache_insp:
+                            self.settings.temp.update(bypass_gen=True)
+                            replace_generation = cache_insp
+                            
+                    query_in = query_insp[0]
+
+            if 'postmail' in recv_loaded_json and not query_in:
+                if recv_loaded_json['postmail']:
+                    maica_assert(0 <= chat_session < 10, "chat_session")
+                    if isinstance(recv_loaded_json['postmail'], dict):
+                        query_insp = await mtools.make_postmail(**recv_loaded_json['postmail'], fsc=self.fsc)
+                        # We're using the old school way to avoid using eval()
+                        if default(recv_loaded_json['postmail'].get('bypass_mf'), True):
+                            self.settings.temp.update(bypass_mf=True)
+                        if default(recv_loaded_json['postmail'].get('bypass_mt'), True):
+                            self.settings.temp.update(bypass_mt=True)
+                        if default(recv_loaded_json['postmail'].get('bypass_stream'), True):
+                            self.settings.temp.update(bypass_stream=True)
+                        if default(recv_loaded_json['postmail'].get('twk_super'), True):
+                            self.settings.temp.update(twk_super=True)
+                        if not default(recv_loaded_json['postmail'].get('strict_conv'), False):
+                            self.settings.temp.update(strict_conv=False)
+                    elif isinstance(recv_loaded_json['postmail'], str):
+                        query_insp = await mtools.make_postmail(content=recv_loaded_json['postmail'], fsc=self.fsc)
+                        self.settings.temp.update(bypass_stream=True, twk_super=True, strict_conv=False)
+                    else:
+                        maica_assert(False, "postmail")
+                    
+                    query_in = query_insp
+
+            if not query_in:
+                maica_assert(recv_loaded_json.get('query'), 'query')
+                query_in = recv_loaded_json['query']
+
+            if G.A.CENSOR_QUERY != '0':
+                tolerance = int(G.A.CENSOR_QUERY)
+                query_censor = await mtools.has_censored(query_in)
+                if len(query_censor) >= tolerance:
+                    sync_messenger(info=f"Query has censored words: {query_censor}", type=MsgType.DEBUG)
+                    raise MaicaInputWarning("Input query has censored words or phrases", "403", "maica_input_query_censored")
+                
+                elif len(query_censor):
+                    sync_messenger(info=f"Input query has censored words or phrases but ignored: {query_censor}", type=MsgType.DEBUG)
+
+            if 'savefile' in recv_loaded_json:
+                if self.settings.basic.savefile_access:
+                    self.sf_inst.add_extra(**recv_loaded_json['savefile'])
                 else:
-                    sync_messenger(info='\n', type=MsgType.PLAIN)
-                    await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', traceray_id=self.traceray_id)
+                    self.settings.temp.update(savefile_access_once=True)
+                    self.sf_inst.use_only(**recv_loaded_json['savefile'])
+            if 'trigger' in recv_loaded_json:
+                if self.settings.basic.mt_extraction:
+                    self.mt_inst.add_extra(*recv_loaded_json['trigger'])
+                else:
+                    self.settings.temp.update(mt_extraction_once=True)
+                    self.mt_inst.use_only(recv_loaded_json['trigger'])
 
-        else:
-            # We just pretend it was generated
-            reply_appended = replace_generation
-            if completion_args['stream']:
-                await buffered_messenger(websocket, 'maica_core_streaming_continue', reply_appended, '100'); await messenger(info='\n', type=MsgType.PLAIN)
-                await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+            # End query types
+
+            match int(self.settings.temp.chat_session):
+                case -1:
+                    maica_assert(isinstance(query_in, (str, list)), 'query')
+                    # chat_session == -1 means query contains an entire chat history(sequence mode)
+                    session_type = -1
+                    session.load(query_in)
+                    query_in = session[-1].content
+
+                    if len(session) > 10:
+                        raise MaicaInputWarning('Sequence exceeded 10 rounds for chat_session -1', '413', 'maica_sequence_rounds_exceeded')
+
+                case i if 0 <= i < 10:
+                    maica_assert(isinstance(query_in, str), 'query')
+                    # chat_session == 0 means single round, else normal
+                    session_type = 0 if i == 0 else 1
+
+                    if session_type:
+                        await session.from_db()
+
+                    if self.settings.basic.enable_mf and not self.settings.temp.bypass_mf:
+                        known_info = await self.mfocus_coro.agenting(query_in)
+                    else:
+                        known_info = {}
+
+                    player_name = '[player]'
+                    if self.settings.extra.prompt_pname_repl:
+                        player_name_get = self.sf_inst.read_from_sf('mas_playername')
+                        if player_name_get:
+                            player_name = player_name_get
+
+                    user_query = MaicaSessionItem("user", query_in)
+                    user_query.context_from_fsc(self.fsc)
+                    session.append(user_query)
+                    context = {
+                            "player_name": player_name,
+                            "known_info": known_info,
+                        }
+                    session[-1].context.update(context)
+
+                case _:
+                    raise MaicaInputError("Using an out of bound session")
+
+            # Construction part done, communication part started
+            completion_args = {
+                "messages": session.utilize(),
+                "stream": self.settings.basic.stream_output,
+                "extra_body": {},
+            }
+            
+            if not self.settings.temp.bypass_sup:
+                completion_args.update(dict(self.settings.super))
             else:
-                await buffered_messenger(websocket, 'maica_core_nostream_reply', reply_appended, '200', type=MsgType.CARRIAGE)
-                await buffered_messenger(None, 'maica_core_complete', f'Reply sent with cache for {self.settings.verification.username}', '1000', traceray_id=self.traceray_id)
+                completion_args.update(self.settings.super.default())
 
-        # Can be post-processed here
-        session.append(MaicaSessionItem("assistant", reply_appended))
+            if self.settings.temp.bypass_stream:
+                completion_args['stream'] = False
 
-        # Trigger process
-        # We should start post processes simultaneously
-        post_coros = []
+            if self.settings.temp.twk_super:
+                completion_args['presence_penalty'] = 1.0 - (1.0 - completion_args['presence_penalty']) * (2/3)
 
-        if len(session) >= 3 * 2 + 1 and self.settings.extra.dscl_pvn:
-            post_coros.append(mtools.ws_dscl_detect(session.utilize(text_only=True)[-4:], self.fsc, bm=buffered_messenger))
+            if self.settings.extra.gen_enforce_lang:
+                if self.settings.basic.target_lang == 'en':
+                    completion_args['extra_body']["structured_outputs"] = {"regex": r"^[^\u4e00-\u9fa5]*$"}
 
-        if self.settings.basic.enable_mt and not self.settings.temp.bypass_mt:
-            post_coros.append(self.mtrigger_coro.triggering(query_in, reply_appended, bm=buffered_messenger))
+            # Add context log
+            previous_rnds = session.utilize(text_only=True)[1:-1]
+            previous_rnds_len = int(len(previous_rnds) / 2)
+            previous_rnds_ellipsed = previous_rnds[-6:]
+            previous_rnds_str = '\n'.join([(('Q: ' if d['role'] == 'user' else 'A: ') + d['content']) for d in previous_rnds_ellipsed])
+            if previous_rnds_len > 3:
+                previous_rnds_str = '... ...\n' + previous_rnds_str
+            if previous_rnds_len:
+                sync_messenger(info=f'\nQuery has {previous_rnds_len} rounds of history:\n{previous_rnds_str}\nEnd of query history', type=MsgType.RECV)
 
-        if self.settings.temp.ms_cache and not self.settings.temp.bypass_gen and not replace_generation:
-            post_coros.append(self.store_ms_cache(ms_cache_identity, reply_appended))
+            sync_messenger(info=f'\nQuery constrcted and ready to go, last input is:\n{query_in}\nSending query...', type=MsgType.PRIM_RECV)
 
-        await asyncio.gather(*post_coros)
+            # We're about to start generation, so any ws interrupts should be handled by buffered_messenger from now.
+            await messenger(websocket, "maica_mcore_gen_start", "Core model generation starting, reconn protection intervening", "201", self.tracker_id)
+            buffered_messenger = BufferedMessenger(self.settings.verification.user_id)
 
-        # Store history here
-        if session_type == 1:
-            stored = await session.wrapped_save()
-            match stored:
-                case 2:
-                    await buffered_messenger(websocket, 'maica_history_sliced', f"Session {self.settings.temp.chat_session} of {self.settings.verification.username} exceeded {self.settings.basic.max_length} characters and sliced", '204')
-                case 1:
-                    await buffered_messenger(websocket, 'maica_history_slice_hint', f"Session {self.settings.temp.chat_session} of {self.settings.verification.username} exceeded {self.settings.basic.max_length * (2/3)} characters, will slice at {self.settings.basic.max_length}", '200', no_print=True)
+            pprt = True if completion_args['stream'] else False
+            if recv_loaded_json.get('pprt') != None:
+                pprt = recv_loaded_json['pprt']
+            pprt_processor = mtools.PPRTProcessor(pprt, self.fsc)
 
-            await buffered_messenger(websocket, 'maica_chat_loop_finished', f'Finished chat loop from {self.settings.verification.username}', '200', traceray_id=self.traceray_id, type=MsgType.INFO)
-        else:
-            await buffered_messenger(websocket, 'maica_chat_loop_finished', f'Finished non-recording chat loop from {self.settings.verification.username}', '200', traceray_id=self.traceray_id, type=MsgType.INFO)
+            if not self.settings.temp.bypass_gen or not replace_generation: # They should present together
 
-        # Seal it finally
-        await buffered_messenger.seal()
+                # Generation here
+                resp = await self.fsc.mcore_conn.make_completion(**completion_args)
+                reply_appended = ''; seq = 0
+
+                if completion_args['stream']:
+                    resp: AsyncStream[ResponseStreamEvent]
+
+                    async for chunk in resp:
+                        if chunk.type == "response.output_text.delta":
+                            token = chunk.delta
+                            if token:
+                                await asyncio.sleep(0)
+                                token = ReUtils.re_sub_replacement_chr.sub('', token)
+
+                                sentence: Optional[str] = await pprt_processor.store_and_split(token)
+                                if sentence:
+                                    await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
+                                    reply_appended += sentence
+                                    seq += 1
+
+                    # Exhaust pprtp on completion finish
+                    sentences: list[str] = await pprt_processor.exaust_and_split()
+                    for sentence in sentences:
+                        await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
+                        reply_appended += sentence
+                        seq += 1
+
+                    sync_messenger(info='\n', type=MsgType.PLAIN)
+                    await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', tracker_id=self.tracker_id)
+
+                else:
+                    resp: Response
+
+                    reply = resp.output_text
+
+                    sentences: list[str] = await pprt_processor.exaust_and_split(reply)
+                    for sentence in sentences:
+                        if len(sentences) == 1:
+                            await buffered_messenger(websocket, 'maica_core_nostream_reply', sentence, '200')
+                        else:
+                            await buffered_messenger(websocket, 'maica_core_streaming_continue', sentence, '100')
+                        reply_appended += sentence
+                        seq += 1
+
+                    if len(sentences) == 1:
+                        await buffered_messenger(None, 'maica_core_complete', f'Reply sent with seed {completion_args['seed']} for {self.settings.verification.username}', '1000', tracker_id=self.tracker_id)
+                    else:
+                        sync_messenger(info='\n', type=MsgType.PLAIN)
+                        await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with seed {completion_args['seed']} for {self.settings.verification.username}, {seq} packets sent', '1000', tracker_id=self.tracker_id)
+
+            else:
+                # We just pretend it was generated
+                reply_appended = replace_generation
+                if completion_args['stream']:
+                    await buffered_messenger(websocket, 'maica_core_streaming_continue', reply_appended, '100'); await messenger(info='\n', type=MsgType.PLAIN)
+                    await buffered_messenger(websocket, 'maica_core_complete', f'Streaming finished with cache for {self.settings.verification.username}', '1000', tracker_id=self.tracker_id)
+                else:
+                    await buffered_messenger(websocket, 'maica_core_nostream_reply', reply_appended, '200', type=MsgType.CARRIAGE)
+                    await buffered_messenger(None, 'maica_core_complete', f'Reply sent with cache for {self.settings.verification.username}', '1000', tracker_id=self.tracker_id)
+
+            # Can be post-processed here
+            session.append(MaicaSessionItem("assistant", reply_appended))
+
+            # Trigger process
+            # We should start post processes simultaneously
+            post_coros = []
+
+            if len(session) >= 3 * 2 + 1 and self.settings.extra.gen_quality_chk:
+                post_coros.append(mtools.ws_quality_chk(session.utilize(text_only=True)[-4:], self.fsc, bm=buffered_messenger))
+
+            if self.settings.basic.enable_mt and not self.settings.temp.bypass_mt:
+                post_coros.append(self.mtrigger_coro.triggering(query_in, reply_appended, bm=buffered_messenger))
+
+            if self.settings.temp.ms_cache and not self.settings.temp.bypass_gen and not replace_generation:
+                post_coros.append(self.store_ms_cache(ms_cache_identity, reply_appended))
+
+            await asyncio.gather(*post_coros)
+
+            # Store history here
+            if session_type == 1:
+                stored = await session.wrapped_save()
+                match stored:
+                    case 2:
+                        await buffered_messenger(websocket, 'maica_history_sliced', f"Session {self.settings.temp.chat_session} of {self.settings.verification.username} exceeded {self.settings.basic.session_len_limit} characters and sliced", '204')
+                    case 1:
+                        await buffered_messenger(websocket, 'maica_history_slice_hint', f"Session {self.settings.temp.chat_session} of {self.settings.verification.username} exceeded {self.settings.basic.session_len_limit * (2/3)} characters, will slice at {self.settings.basic.session_len_limit}", '200', no_print=True)
+
+                await buffered_messenger(websocket, 'maica_chat_loop_finished', f'Finished chat loop from {self.settings.verification.username}', '200', tracker_id=self.tracker_id, type=MsgType.INFO)
+            else:
+                await buffered_messenger(websocket, 'maica_chat_loop_finished', f'Finished non-recording chat loop from {self.settings.verification.username}', '200', tracker_id=self.tracker_id, type=MsgType.INFO)
+
+            # Seal it finally
+            await buffered_messenger.seal()
 
 # Reserved for whatever
 def callback_func_switch(future):
@@ -569,7 +577,7 @@ async def main_logic(
         except CommonMaicaException as ce:
             if ce.is_critical:
                 traceback.print_exc()
-            await messenger(websocket, error=ce, traceray_id=getattr(thread_instance, 'traceray_id', None), no_raise=True)
+            await messenger(websocket, error=ce, tracker_id=getattr(thread_instance, 'tracker_id', None), no_raise=True)
 
         except websockets.WebSocketException as we:
             try:

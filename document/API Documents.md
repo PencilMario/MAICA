@@ -154,27 +154,28 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     "type": "params",
     "chat_params": {
         "stream_output": true,
-        "deformation": false,
         "enable_mf": true,
         "enable_mt": true,
-        "sf_extraction": true,
-        "mt_extraction": true,
+        "savefile_access": true,
         "target_lang": "zh",
-        "max_length": 8192,
+        "session_len_limit": 8192,
 
-        "sfe_aggressive": false,
-        "mf_aggressive": false,
-        "tnd_aggressive": 1,
-        "esc_aggressive": true,
-        "amt_aggressive": true,
+        "prompt_pname_repl": false,
+        "mf_llm_concl": false,
+        "mf_sf_access_impl": 1,
+        "mf_const_sf_access": 1,
+        "mf_const_tools": 1,
+        "esearch_llm_concl": true,
+        "mf_precheck_mt": true,
+        "mt_concl_memory": 1,
         "nsfw_acceptive": true,
-        "pre_additive": 0,
-        "post_additive": 1,
+        "mf_context_rnds": 0,
+        "mt_context_rnds": 1,
         "tz": null,
-        "dscl_pvn": false,
-        "pre_astp": true,
-        "post_astp": false,
-        "enforce_lang": true,
+        "gen_quality_chk": false,
+        "mf_disable_loop": true,
+        "mt_disable_loop": true,
+        "gen_enforce_lang": true,
 
         "max_tokens": 1600,
         "seed": null,
@@ -200,8 +201,6 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 * stream_output: 决定MAICA是否使用流式输出.
 
-* deformation: 在v1.1更新后已弃用, 但暂时保留.
-
 * enable_mf: 允许MFocus介入.
 
     > 关于MFocus的具体介绍见后文.
@@ -210,21 +209,22 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
     > 关于MTrigger的具体介绍见后文.
 
-* sf_extraction: 从上传的资料中读取玩家存档.
+* savefile_access: 从上传的资料中读取玩家存档.
 
     > 即使设为关闭, 也会读取随query传入的部分.
 
-* mt_extraction: 从上传的资料中读取触发器表.
-
-    > 即使设为关闭, 也会读取随query传入的部分.
-
-* target_lang: 目标生成语言. 仅支持"zh"或"en".
+* target_lang: 目标生成语言. 支持"zh", "en", "auto".
 
     * 该参数不能100%保证生成语言是目标语言.
     * 该参数影响范围广泛, 包括默认时区, 节日文化等, 并不止目标生成语言. 建议设为你的实际母语.
     * 截至文档编纂时为止, MAICA官方部署的英文能力仍然弱于中文.
+    * auto代表通过prompt让模型自行选择语言回答, 效果不等同于指定对应语言. 如果目标语言属于"zh"或"en"请尽可能明确指定.
 
-* max_length: 会话保留的最大长度. 范围512-28672.
+* tz: 时区. 支持null, "zh", "en" 或具体时区形如"Asia/Shanghai".
+
+    * 设为null默认根据语言选择. 在v1.3以前属于高级设置.
+
+* session_len_limit: 会话保留的最大长度. 范围512-28672.
 
     * 按字符数计算. 每3个ASCII字符只占用一个字符长度.
     * 字符数超过限制的 2/3 之后, 每次生成结束会发送警告.
@@ -233,77 +233,104 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 ### 高级设置:
 
-* sfe_aggressive: 将prompt和引导中的[player]字段替换为玩家真名.
+* prompt_pname_repl: 将prompt和引导中的[player]字段替换为玩家真名.
 
     + 模型对玩家的名字有实质性理解.
     - 明显更容易发生表现离群和专注混乱.
 
-* mf_aggressive: 要求agent模型生成最终指导, 并替代默认MFocus指导.
+* mf_llm_concl: 要求agent模型生成最终指导, 并替代默认MFocus指导.
 
     + 信息密度更高, 更容易维持语言自然.
-    - 表现十分依赖agent模型自身的能力.
-    - 启用时一般会无效化tnd_aggressive.
+    - 表现十分依赖agent模型自身的能力, 容易起反作用.
+    - 启用时一般会无效化mf_const_tools.
 
-* tnd_aggressive: 即使MFocus未调用工具, 也提供一些工具的结果.
+* mf_sf_access_impl: 实验性功能, 从设定集(存档)中快速提取信息的方式, 并替代传统MFocus实现.
+
+    * 0: (传统)纯LLM实现.
+    * 1: RAG+Reranker实现.
+    * 2: 纯RAG实现.
+
+    + 会快很多.
+    - 纯RAG不会检索query携带的存档内容.
+    - 精度显著低于传统实现, 考验核心模型的抗干扰能力.
+    - 为0时禁用mf_const_sf_access.
+
+* mf_const_sf_access: 实验性功能, 即使MFocus未调用信息提取, 也提供信息提取的结果.
+
+    * 0: (传统)仅MFocus工具.
+    * 1: 预检索+工具.
+    * 2: 仅预检索.
+
+    + 显著提高设定数据的干预积极性.
+    - 容易引入干扰信息, 考验核心模型的抗干扰能力.
+    - 效果偏弱, 在大多数情况下可能只是在浪费时间.
+
+* mf_const_tools: 即使MFocus未调用工具, 也提供一些工具的结果.
 
     * 0: 关闭.
     * 1: 提供当前时间和节日.
-    * 2: 提供当前日期, 还尝试提供本地天气.
-    * 3: 额外提供更详细的节日事件.
+    * 2: 还提供当前日期, 还尝试提供本地天气.
 
     + 其值越高, 越能避免信息缺乏导致的幻觉, 并产生灵活体贴的表现.
     - 其值越高, 越有可能产生注意力涣散和专注混乱.
 
-* esc_aggressive: 在MFocus调用互联网搜索的情况下, 要求其整理一遍结果.
+* esearch_llm_concl: 在MFocus调用互联网搜索的情况下, 要求其整理一遍结果.
 
-    + 大多数情况下信息密度更高, 更容易维持语言自然.
+    + 大多数情况下信息密度更高, 表现更稳定.
     - 涉及互联网搜索时生成速度更慢.
+    - 可能会对核心模型的回答方式产生误导.
 
-* amt_aggressive: 当MTrigger存在时, 要求MFocus预检玩家的请求并提供指导.
+* mf_precheck_mt: 当MTrigger存在时, 要求MFocus预检玩家的请求并提供指导.
 
     + 比较明显地改善MTrigger失步问题.
     - 在少数情况下对语言的自然性产生破坏.
 
+* mt_concl_memory: 实验性功能, 在session归档/清除时, 生成记忆概要用于保留有效信息.
+
+    * 0: 关闭.
+    * 1: 仅在session超长并自动裁剪时轮转概要.
+    * 2: 在session自动裁剪或手动清除时轮转概要.
+
+    + 能从对话中保留持久性信息, 终于不用再全靠手填了.
+    - 触发生成概要的操作会变慢很多.
+    - 可能导致注意力涣散, 考验核心模型的抗干扰能力.
+
 * nsfw_acceptive: 要求模型宽容正面地对待有毒内容.
 
     + (出乎意料地)在大多数场合下对模型表现有正面作用, 即使不涉及有毒内容.
-    - 在少数情况下造成意料之外的问题.
+    - 这可能会造成意料之外的问题, 虽然目前为止没见过.
 
-* pre_additive: 在MFocus介入时, 额外提供上下文以供分析. 范围0-5.
+* mf_context_rnds: 在MFocus介入时, 额外提供上下文以供分析. 范围0-5.
 
     + 改善MFocus对连贯对话的理解能力.
     - 明显更容易破坏MFocus的应答模式.
 
-* post_additive: 在MTrigger介入时, 额外提供上下文以供分析. 范围0-5.
+* mt_context_rnds: 在MTrigger介入时, 额外提供上下文以供分析. 范围0-5.
 
     + 改善MTrigger对连贯对话的理解能力.
     - 更容易破坏MTrigger的应答模式.
 
-* tz: 时区. 支持null, "zh", "en" 或具体时区形如"Asia/Shanghai".
-
-    * 其实不太算一个高级设置, 有需要可以调. 设为null默认根据语言选择.
-
-* dscl_pvn: 对话长度超过3轮后, 在每轮对话结束时, 要求MNerve介入检查输出合理性.
+* gen_quality_chk: 对话长度超过3轮后, 在每轮对话结束时, 要求MNerve介入检查输出合理性.
 
     + 量化地检测判断会话劣化情况, 以免用户注意不到.
     - 产生额外的MNerve开销.
-    - 我觉得智力正常的人都用不上这种功能才对.
+    - 我觉得...正常人都用不上这种功能才对.
 
-* pre_astp: 禁用MFocus工具链循环以节约时间.
+* mf_disable_loop: 禁用MFocus工具链循环以节约时间.
 
     + 多数工具调用情况下节约时间, 降低TTFT.
     - 有可能缺漏信息.
-    - 启用时会阻止mf_aggressive.
+    - 启用时会阻止mf_llm_concl.
 
-* post_astp: 禁用MTrigger工具链循环以节约时间.
+* mt_disable_loop: 禁用MTrigger工具链循环以节约时间.
 
     + 多数触发器调用情况下节约时间.
-    - 明显更容易缺漏调用.
+    - 有可能缺漏调用.
 
-* enforce_lang: 实验性功能, 通过LLM引导式解码(guided_regex)强制使用目标语言输出.
+* gen_enforce_lang: 实验性功能, 通过LLM引导式解码(guided_regex)强制使用目标语言输出.
 
     * 截至文档编纂时为止, 该功能仅对目标生成语言en有效. 在目标生成语言为zh时, 该功能无法阻止模型错误地使用英文作答.
-    * 引导式解码不属于OpenAI规范的一部分, 要求部署实例提供支持, 如使用vllm.
+    * 不同解码后端对regex引导的支持性不同, 可能导致表达式失效或工作异常.
     * 启用该功能可能影响模型的表现, 或导致其它意料之外的问题.
 
 ### 超参数:
@@ -468,7 +495,8 @@ MAICA的规范包含一系列占位符与标记, 这些标记应当由前端处�
 
 websocket在广域网的连接是可能中断的. 为确保用户体验的连贯一致性, MAICA提供简单的断点续传功能.
 
-> 仅当核心模型开始处理时, 断点续传保护功能才会介入. 中断早于核心模型开始处理的情况不能续传, 应当重发query.
+> 仅当核心模型开始处理时, 断点续传保护功能才会介入. 中断早于核心模型开始处理的情况不能续传, 应当重发query.  
+> 自v1.3后, 断点续传保护功能介入时会发送maica_mcore_gen_start.
 
 在重新连接后, 发送续传请求:
 
@@ -568,7 +596,7 @@ use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默�
 
 其中, 若MPostal请求体为str则使用简单模式, 将其设置为一个dict可进行更详细的设置:
 
-`{"header": "信件标题", "content": "信件内容", "bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "ic_prep": true, "strict_conv": false}`
+`{"header": "信件标题", "content": "信件内容", "bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "twk_super": true, "strict_conv": false}`
 
 > 简单模式下的str将被用作信件内容, 其余条目留空或默认.
 
@@ -578,7 +606,7 @@ use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默�
 
 * bypass_stream: 本轮响应是否忽略流式输出.
 
-* ic_prep: 本轮响应是否微调超参数和工具表现, 以获取更适合信件的生成结果.
+* twk_super: 本轮响应是否微调超参数和工具表现, 以获取更适合信件的生成结果.
 
 * strict_conv: 本轮响应是否仍然保持对话格式回答, 而非回信.
 
@@ -826,7 +854,7 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
     `{"object": "验证项目", "value": "待验证内容"}`
 
-    其中验证项目目前只可选geolocation, 会查询地理位置是否规范可用.
+    其中验证项目目前只可选geolocation, 会查询地理位置是否规范可用. 成功时返回经纬度.
 
 返回的content是对应条目结果, 若未传入content则返回用户名.
 
@@ -1017,27 +1045,25 @@ content不存在时, access_token必须存在. 返回的content是一个list, �
 
 ```
 {
-    "amt_aggressive": true,
-    "deformation": false,
+    "mf_precheck_mt": true,
     "enable_mf": true,
     "enable_mt": true,
-    "esc_aggressive": true,
+    "esearch_llm_concl": true,
     "frequency_penalty": 0.0,
-    "max_length": 8192,
+    "session_len_limit": 8192,
     "max_tokens": 1600,
-    "mf_aggressive": false,
-    "mt_extraction": true,
+    "mf_llm_concl": false,
     "nsfw_acceptive": true,
-    "post_additive": 1,
-    "pre_additive": 0,
+    "mt_context_rnds": 1,
+    "mf_context_rnds": 0,
     "presence_penalty": 0.0,
     "seed": null,
-    "sf_extraction": true,
-    "sfe_aggressive": false,
+    "savefile_access": true,
+    "prompt_pname_repl": false,
     "stream_output": true,
     "target_lang": "zh",
     "temperature": 0.22,
-    "tnd_aggressive": 1,
+    "mf_const_tools": 1,
     "top_p": 0.7,
     "tz": null
 }
@@ -1057,7 +1083,6 @@ mas_affection #int
 mas_geolocation #str
 
 mas_player_additions #["[player]喜欢吃寿司.", "[player]喜欢初音未来.", "[player]不喜欢猫"]
-mas_sf_hcb #bool
 
 _mas_pm_added_custom_bgm	Player has added custom music to the game before.
 _mas_pm_religious	Is the player religious?
@@ -1180,13 +1205,10 @@ sessions
 
 * mas_geolocation为str格式的玩家地理位置. 此条目应当尽可能简短到至多保留省名与城市名, 过长的条目会导致搜索引擎误解.
 
-* mas_player_additions为list格式的补充数据. 此条目应当为一个list中的若干str, 且至多检索72项, 超出则mfocus每次随机抽取72项. 每项应当为一个简单表述, 过长的项可能会导致失焦.
+* mas_player_additions为list格式的补充数据. 此条目应当为一个list中的若干str, 且至多检索256项, 超出则mfocus每次随机抽取256项. 每项应当为一个简单表述, 过长的项可能会导致失焦.
 
-* mas_sf_hcb为高可自定义性开关. 设为true后, MFocus将停止索引任何来自MAS存档的基本信息, 并能够同时检索至多360项补充数据.
-
-    * 若启用hcb, 你应当格外注意使补充数据简短精炼, 有序性强, 否则会极大地降低MFocus命中率.
-
-    * 启用hcb会缩减基本设定数据到最少, 以便用户提供针对性的补充.
+* ~~mas_sf_hcb为高可自定义性开关. 设为true后, MFocus将停止索引任何来自MAS存档的基本信息, 并能够同时检索至多360项补充数据.~~
+* mas_sf_hcb自v1.3后被弃用, 请直接管理上传的存档条目实现.
 
 原理上, 任何条目都是可缺省的. 缺省关键变量将使其被默认值替代, 缺省事件变量将使其退出MFocus索引.
 
@@ -1205,11 +1227,11 @@ sessions
 
 使用该模板的触发器会根据用户输入与上文内容, 决策对好感度应做的调整.
 
-若sf_extraction未启用, 此功能的准确性可能会受到一定程度的影响.
+若savefile_access未启用, 此功能的准确性可能会受到一定程度的影响.
 
 好感度调幅默认为不超过+3.0, 你可以自行设定乘幅. 简单地对其调幅举例, 日常的问好大约会输出+0.2, 对美貌的称赞大约会输出+0.8, 简短的示爱大约会输出+1.5, 长段的示爱大约会输出+3.0.
 
-输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["alter_affection", {"affection": "+1.5"}], "type": "carriage", "time_ms": 时间戳(毫秒)}`
+输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["alter_affection", {"alter_value": "+1.5"}], "type": "carriage", "time_ms": 时间戳(毫秒)}`
 
 该模板的触发器最多存在一个.
 
