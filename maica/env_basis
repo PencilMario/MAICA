@@ -135,15 +135,8 @@ MAICA_DB_PASSWORD = ''# 123456
 MAICA_AUTH_DB = ''# forum_flarum_db
 # MySQL/SQLite maica database name
 MAICA_DATA_DB = 'maica'
-# Vector db for Milvus RAG, url or file
-# Theoretically compatible with Milvus-Lite but doesn't work for me, so avoid
-MAICA_MILVUS_ADDR = ''# http://127.0.0.1:19530
-# Milvus database user / unused for lite
-MAICA_MILVUS_USER = ''# user
-# Milvus user password / unused for lite
-MAICA_MILVUS_PASSWORD = ''# 123456
-# Milvus database collection name
-MAICA_MILVUS_COLL = 'maica_rag'
+# Embedded LanceDB path for RAG. Keep this on persistent writable storage.
+MAICA_VECTOR_DB_PATH = 'fs_storage/vector_db'
 # Third party API keys, must be valid json
 MAICA_TP_APIS = '
     {

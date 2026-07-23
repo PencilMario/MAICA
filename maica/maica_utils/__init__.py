@@ -70,7 +70,8 @@ from .maica_utils import (
     SafeFormatDict,
     DummyClass,
 )
-from .connection_utils import MilvusDbConnectionManager, ConnUtils, AiConnectionManager
+from .connection_utils import ConnUtils, AiConnectionManager
+from .vector_store import LanceVectorStore
 from .setting_utils import MaicaSettings
 from .fsc_early import AllowArb, RealtimeSocketsContainer
 from .encryption_utils import CryptoObject, crypto_object, decrypt_token, encrypt_token, sign_message, verify_message
@@ -161,7 +162,7 @@ __all__ = [
     'RobustList',
     'SafeFormatDict',
     'DummyClass',
-    'MilvusDbConnectionManager',
+    'LanceVectorStore',
     'ConnUtils',
     'AiConnectionManager',
     'MaicaSettings',

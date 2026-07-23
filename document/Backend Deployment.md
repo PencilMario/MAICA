@@ -64,7 +64,7 @@ python -m ruff check maica tests examples
 python -m pip check
 ```
 
-离线测试不要求模型、Milvus、SSH 或互联网。真实端点可使用 `examples/model_smoke.py` 与 `examples/milvus_smoke.py` 手工检查。
+离线测试不要求模型、LanceDB 数据、SSH 或互联网。真实模型端点可使用 `examples/model_smoke.py` 手工检查，本地向量库可使用 `examples/lancedb_smoke.py` 检查。
 
 + 或者, 直接通过pypi安装:
 

@@ -88,10 +88,10 @@ class GenericModelHelper(AsyncCreator):
         if not ds_set:
             raise MaicaDbWarning("No dataset line found finally")
 
-        await self.csc.vector_pool.cross_insert(
+        await self.csc.vector_pool.sync_texts(
             embedding_conn=self.csc.embedding_conn,
             data=ds_set,
-            filter={
+            filters={
                 "user_id": -1,
             }
         )
@@ -99,13 +99,13 @@ class GenericModelHelper(AsyncCreator):
     async def search(self, query: str):
         vector_pool = self.csc.vector_pool
 
-        res_set = await vector_pool.embed_search(
+        res_set = await vector_pool.search(
             embedding_conn=self.csc.embedding_conn,
             data=[query],
-            filter={
+            filters={
                 "user_id": -1,
             },
-            cfd_min=0,
+            similarity_min=0,
         )
 
         return res_set

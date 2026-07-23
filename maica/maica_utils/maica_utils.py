@@ -1076,7 +1076,7 @@ def is_mcore_vl():
 
 def is_rag_enabled():
     """If this server instance could utilize RAG."""
-    return bool(G.A.EMBEDDING_ADDR and G.A.MILVUS_ADDR)
+    return bool(G.A.EMBEDDING_ADDR and G.A.VECTOR_DB_PATH)
 
 def is_auth_sqlite():
     """If auth_db is sqlite, else mysql."""

@@ -28,26 +28,26 @@ class SessionPersistentLlmMixin():
     content_temp: dict
 
 
-    async def to_milvus(self, _data: Optional[list] = None):
-        """As said, to milvus. Milvus is not considered persistent storage so only write."""
+    async def to_vector_store(self, _data: Optional[list] = None):
+        """Synchronize derived retrieval vectors for this session."""
         vector_pool = self.fsc.vector_pool
         if not self.fsc.is_vector_ready:
             return
         user_id = self.fsc.maica_settings.verification.user_id
         session_num = self.session_num
 
-        await vector_pool.cross_insert(
+        await vector_pool.sync_texts(
             embedding_conn=self.fsc.embedding_conn,
             data = _data if _data is not None else self.form_info(),
-            filter={
+            filters={
                 "user_id": user_id,
                 "chat_session_num": session_num,
             },
         )
 
 
-    async def filter_milvus(self, query: str, topk: int = 5) -> Set:
-        """Embed and search query from milvus."""
+    async def filter_vector_store(self, query: str, topk: int = 5) -> Set:
+        """Embed and search a query in the local vector store."""
         vector_pool = self.fsc.vector_pool
         if not self.fsc.is_vector_ready:
             return []
@@ -55,20 +55,21 @@ class SessionPersistentLlmMixin():
         user_id = self.fsc.maica_settings.verification.user_id
         session_num = self.session_num
 
-        res_set = await vector_pool.embed_search(
+        res_set = await vector_pool.search(
             embedding_conn=self.fsc.embedding_conn,
             data=[query],
-            filter={
+            filters={
                 "user_id": user_id,
                 "chat_session_num": session_num,
             },
+            topk=topk,
         )
 
         return res_set
 
 
     async def filter_reranker(self, query: str, documents: Optional[list] = None, topk: int = 2) -> list:
-        """More precisely filter results, suggest using filter_milvus first."""
+        """More precisely filter results, suggest using filter_vector_store first."""
         reranking_conn = self.fsc.reranking_conn
         if not self.fsc.is_reranking_ready:
             return []
@@ -77,7 +78,7 @@ class SessionPersistentLlmMixin():
             documents is None
             and self.fsc.is_vector_ready
         ):
-            documents = await self.filter_milvus(query, 10)
+            documents = await self.filter_vector_store(query, 10)
         elif documents is None:
             documents = self.form_info()
 
@@ -121,7 +122,7 @@ class SessionPersistentLlmMixin():
             documents is None
             and self.fsc.is_vector_ready
         ):
-            documents = await self.filter_milvus(query, 10)
+            documents = await self.filter_vector_store(query, 10)
         elif documents is None:
             documents = self.form_info()
 

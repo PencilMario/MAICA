@@ -3,7 +3,6 @@ from typing import *
 from pydantic import BaseModel, Field, model_validator
 from pydantic.dataclasses import dataclass as pdataclass
 from websockets import ServerConnection
-from pymilvus import AsyncMilvusClient
 from .maica_utils import *
 from .setting_utils import MaicaSettings
 from .fsc_early import AllowArb, RealtimeSocketsContainer, TrackerId
@@ -13,7 +12,7 @@ from .users_utils import FscUsersFuncMixin
 
 class ConnSocketsContainer(AllowArb):
     """Why so many connections."""
-    vector_pool: Optional[MilvusDbConnectionManager]=None
+    vector_pool: Optional[LanceVectorStore]=None
     mcore_conn: Optional[AiConnectionManager]=None
     mfocus_conn: Optional[AiConnectionManager]=None
     mvista_conn: Optional[AiConnectionManager]=None
@@ -64,7 +63,7 @@ class FullSocketsContainer(FscUsersFuncMixin, AllowArb):
     # Discarded, do not use
     # miscellaneous: dict = field(default_factory=lambda: {})
 
-    vector_pool: ClassVar[Optional[MilvusDbConnectionManager | AsyncMilvusClient]]
+    vector_pool: ClassVar[Optional[LanceVectorStore]]
     mcore_conn: ClassVar[Optional[AiConnectionManager]]
     mfocus_conn: ClassVar[Optional[AiConnectionManager]]
     mvista_conn: ClassVar[Optional[AiConnectionManager]]

@@ -56,7 +56,7 @@ python -m pytest -q
 python -m ruff check maica tests examples
 ```
 
-`examples/` 中的脚本是需要真实模型或 Milvus 的手工连通性检查，不属于离线测试。维护者应同时阅读 [`document/MAINTENANCE.md`](document/MAINTENANCE.md)。
+`examples/` 中的脚本用于真实模型或 LanceDB/Nuitka 的手工检查，不属于离线测试。维护者应同时阅读 [`document/MAINTENANCE.md`](document/MAINTENANCE.md)。
 
 ## 部署安全
 

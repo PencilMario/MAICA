@@ -245,7 +245,7 @@ class AgentTools():
             case 1:
                 res = await self.sp.filter_reranker(query)
             case 2:
-                res = await self.sp.filter_milvus(query)
+                res = await self.sp.filter_vector_store(query)
 
         if res:
             text = '; '.join(res)
@@ -289,7 +289,7 @@ if __name__ == "__main__":
         fsc.reranking_conn = await ConnUtils.reranking_conn()
 
         async with acquire_dbo("persistent", fsc) as sp:
-            # await sp.to_milvus(set())
+            # await sp.to_vector_store(set())
 
             toolbox = AgentTools(fsc, sp)
             print(fsc.real_sf_access_impl)

@@ -125,9 +125,9 @@ def test_current_schema_migration_is_idempotent_on_sqlite() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         old_engine = DatabaseUtils.engine_data
-        old_milvus = G.A.MILVUS_ADDR
+        old_vector_path = G.A.VECTOR_DB_PATH
         DatabaseUtils.engine_data = engine
-        G.A.MILVUS_ADDR = ""
+        G.A.VECTOR_DB_PATH = ""
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(SqlBaseData.metadata.create_all)
@@ -135,7 +135,7 @@ def test_current_schema_migration_is_idempotent_on_sqlite() -> None:
             await migration_4.migrate()
         finally:
             DatabaseUtils.engine_data = old_engine
-            G.A.MILVUS_ADDR = old_milvus
+            G.A.VECTOR_DB_PATH = old_vector_path
             await engine.dispose()
 
     asyncio.run(scenario())

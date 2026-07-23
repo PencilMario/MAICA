@@ -29,7 +29,7 @@ python -m compileall -q maica tests examples
 python -m pip check
 ```
 
-测试必须保持离线、确定且无外部副作用。需要模型、Milvus 或 SSH 的检查放在 `examples/`，不要以 `test_*.py` 命名。涉及数据库的测试使用内存 SQLite，并在 `finally` 中恢复 `DatabaseUtils` 的全局工厂。
+测试必须保持离线、确定且无外部副作用。需要模型、LanceDB 打包验证或 SSH 的检查放在 `examples/`，不要以 `test_*.py` 命名。涉及数据库的测试使用临时目录或内存 SQLite，并在 `finally` 中恢复 `DatabaseUtils` 的全局工厂。
 
 ## 发布检查
 
