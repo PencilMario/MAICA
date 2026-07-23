@@ -186,11 +186,11 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, parse_
                         export_keys('.')
                     case 'import':
                         import_keys('.')
-                exit()
+                raise SystemExit(0)
 
             if operate_templates:
                 print_templates() if operate_templates == 'print' else create_templates()
-                exit()
+                raise SystemExit(0)
 
             dest_env(envdir, extra_envdir)
 
@@ -203,7 +203,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, parse_
                             sync_messenger(info='[maica-cli] MAICA using served databases!', type=MsgType.WARN)
                     case _:
                         sync_messenger(info='\n[maica-cli] Function yet not supported, do it manually.\nNever ask why we made this.', type=MsgType.LOG)
-                exit()
+                raise SystemExit(0)
 
             initialized = True
         except Exception as e:

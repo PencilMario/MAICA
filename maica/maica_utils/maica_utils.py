@@ -768,7 +768,7 @@ def sync_messenger(
         # Forming send
         msg_send = info
         
-        if type == 'error' and int(G.A.NO_SEND_ERROR):
+        if type == 'error' and int(G.A.NO_SEND_ERROR or 0):
             msg_send = "A critical exception happened serverside, contact administrator"
 
         if tracker_id and isinstance(info, str):
