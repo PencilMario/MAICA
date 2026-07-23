@@ -7,12 +7,15 @@ import orjson
 import functools
 import types
 
-from abc import ABC, abstractmethod
+import sqlalchemy
+from sqlalchemy.orm import load_only
+
 from typing import *
-from datetime import datetime
-from dataclasses import dataclass
-from maica.mtools import providers
-from maica.maica_utils import *
+from pydantic import Field
+from .maica_utils import *
+from .fsc_late import FullSocketsContainer
+from .database_utils import *
+from .database_models import *
 
 class CheckDestroyed():
     @staticmethod
@@ -40,31 +43,27 @@ class CheckDestroyed():
 class DbBoundObject(CheckDestroyed):
     """
     A basic db-bound object.
-    table, prim_key_name and fsc are required to function, fill in sub objects.
+    This is like the concept of ORM, but I made this before even knowning it.
+    _model and fsc are required to function, fill in sub objects.
 
     Something to notice, this is designed to be session_num bound. WILL NOT change session_num on fsc change.
+    Notice: This cannot inherit from BaseModel because subclasses might inherit from list (session).
     """
     session_num: int = 0
     """fsc chat_session is flexible, we shouldn't depend on it if we want this to be session-unique."""
     fsc: Optional[FullSocketsContainer] = None
 
-    # Enforce implementations
-    @property
-    @abstractmethod
-    def TABLE() -> str: ...
-    @property
-    @abstractmethod
-    def PRIM_KEY_NAME() -> str: ...
+    _model: ClassVar[Type[SqlBaseData]]
 
     SESSION_DB_MIN: ClassVar[int] = 0
     SESSION_DB_BELOW: ClassVar[int] = 10
 
-    _empty = lambda: []
+    _empty = list
     """To properly reset self. Override if necessary."""
 
     def clear(self):
         self.text: str = ''
-        self.content: Union[dict, list] = self._empty
+        self.content: Union[dict, list] = self._empty()
 
     def reset(self):
         """Normally just use clear."""
@@ -72,22 +71,28 @@ class DbBoundObject(CheckDestroyed):
         self.clear()
 
     def __post_init__(self):
-        self.i_name = self.TABLE.rstrip('s')
+        self.i_name = self._model.__tablename__
         self.is_destroyed = False
         self.lock = asyncio.Lock()
         self.reset()
 
     def load(self, item: list | dict | str):
-        """Load from item, like uploading or what"""
+        """Load from item, like uploading or what."""
         if not isinstance(item, str):
             self.text = orjson.dumps(item).decode()
             self.content = item
         else:
             item = item.strip()
-            if not item[0] in ('[', '{'):
+            if not item:
+                raise MaicaInputWarning("Cannot load empty serialized data")
+            if item[0] not in ('[', '{'):
                 item = f"[{item}]"
             self.content = orjson.loads(item)
             self.text = item
+
+    def _post_upload(self, *args, **kwargs):
+        """For post-upload checks. Override it."""
+        ...
 
     def local_sync(self, from_which: Literal["text", "content"] = "content"):
         """Sync local contents, run before to_db."""
@@ -97,93 +102,96 @@ class DbBoundObject(CheckDestroyed):
             case "content":
                 self.load(self.content)
 
+    def _check_ess(self):
+        user_id = self.fsc.maica_settings.verification.user_id
+        session_num = self.session_num
+        if not user_id or session_num is None:
+            raise MaicaDbError("DB credentials not complete")
+        maica_assert(self.SESSION_DB_MIN <= session_num < self.SESSION_DB_BELOW, full_info=f"{session_num} is not acceptable {self.i_name}")
+
     async def init_db(self):
         # Common
         user_id = self.fsc.maica_settings.verification.user_id
         session_num = self.session_num
-        maica_pool = self.fsc.maica_pool
-        assert user_id and session_num and maica_pool, "DB cridentials not complete"
-        maica_assert(self.SESSION_DB_MIN <= session_num < self.SESSION_DB_BELOW, full_info=f"{session_num} is not acceptable {self.i_name}")
+        self._check_ess()
 
-        # First if row exists already
-        sql_expression_1 = f"SELECT {self.PRIM_KEY_NAME} FROM {self.TABLE} WHERE user_id = %s AND chat_session_num = %s"
-        result = await maica_pool.query_get(expression=sql_expression_1, values=(user_id, session_num))
+        async with DatabaseUtils.SessionData() as dbs:
+            async with dbs.begin():
 
-        # Then record or new
-        if result:
-            prim_key_id, = result
-        else:
-            sql_expression_2 = f"INSERT INTO {self.TABLE} (user_id, chat_session_num, content) VALUES (%s, %s, %s)"
-            result = await maica_pool.query_modify(expression=sql_expression_2, values=(user_id, session_num, "[]"))
-            prim_key_id = result[1]
-        
-        self.prim_key_id = prim_key_id
+                obj = await sqla_get_or_create(
+                    dbs,
+                    self._model,
+                    {
+                        "user_id": user_id,
+                        "chat_session_num": session_num,
+                    },
+                    requires=("id", ),
+                )
+            
+        self.prim_key_id = obj.id
 
     async def to_db(self, skip_sync = False):
         # Common
-        user_id = self.fsc.maica_settings.verification.user_id
-        session_num = self.session_num
-        maica_pool = self.fsc.maica_pool
-        assert user_id and session_num and maica_pool, "DB cridentials not complete"
-        maica_assert(self.SESSION_DB_MIN <= session_num < self.SESSION_DB_BELOW, full_info=f"{session_num} is not acceptable {self.i_name}")
+        self._check_ess()
 
         # First prepare data
-        # We can separate this but just in case we forget
+        # If skip_sync is used, by default we assume it's uploading
         if not skip_sync:
             self.local_sync()
-
-        # Then if this row exists
-        if not self.prim_key_id:
-            sql_expression_1 = f"SELECT {self.PRIM_KEY_NAME} FROM {self.TABLE} WHERE user_id = %s AND chat_session_num = %s"
-            result = await maica_pool.query_get(expression=sql_expression_1, values=(user_id, session_num))
         else:
-            result = (self.prim_key_id, )
+            # So, we run post_upload checks here
+            try:
+                self._post_upload()
+            except CommonMaicaException:
+                self.clear()
+                raise
+            except Exception as exc:
+                self.clear()
+                raise MaicaInputWarning(f"Invalid {self.i_name} content: {exc}") from exc
 
-        # Then update or new
-        if result:
-            prim_key_id, = result
-            sql_expression_2 = f"UPDATE {self.TABLE} SET content = %s WHERE {self.PRIM_KEY_NAME} = %s"
-            result = await maica_pool.query_modify(expression=sql_expression_2, values=(self.content, prim_key_id))
-        else:
-            await messenger(self.fsc.websocket, f'{self.i_name}_not_present', f"Determined {self.i_name} not exist, inserting new", "306", self.fsc.tracker_id)
-            sql_expression_2 = f"INSERT INTO {self.TABLE} (user_id, chat_session_num, content) VALUES (%s, %s, %s)"
-            result = await maica_pool.query_modify(expression=sql_expression_2, values=(user_id, session_num, self.content))
-            prim_key_id = result[1]
-
+        # Ensure row exists
         if not self.prim_key_id:
-            self.prim_key_id = prim_key_id
+            await self.init_db()
+
+        async with DatabaseUtils.SessionData() as dbs:
+            async with dbs.begin():
+                model = self._model
+
+                # Update content
+                stmt = sqlalchemy.update(model).where(
+                    model.id == self.prim_key_id,
+                ).values(
+                    content=self.text,
+                )
+
+                await dbs.execute(stmt)
 
     async def from_db(self):
         # Common
-        user_id = self.fsc.maica_settings.verification.user_id
-        session_num = self.session_num
-        maica_pool = self.fsc.maica_pool
-        assert user_id and session_num and maica_pool, "DB cridentials not complete"
-        maica_assert(self.SESSION_DB_MIN <= session_num < self.SESSION_DB_BELOW, full_info=f"{session_num} is not acceptable {self.i_name}")
+        self._check_ess()
 
-        # First get data & existence
-        sql_expression_1 = f"SELECT {self.PRIM_KEY_NAME}, content FROM {self.TABLE} WHERE user_id = %s AND chat_session_num = %s"
-        result = await maica_pool.query_get(expression=sql_expression_1, values=(user_id, session_num))
+        # Ensure row exists
+        if not self.prim_key_id:
+            await self.init_db()
 
-        # Then load or warn
-        if result:
-            prim_key_id, db_content = result
-            if db_content:
-                self.load(db_content)
+        async with DatabaseUtils.SessionData() as dbs:
+            model = self._model
+
+            stmt = sqlalchemy.select(model).where(
+                model.id == self.prim_key_id,
+            ).options(
+                load_only(model.content),
+            )
+
+            obj = await dbs.scalar(stmt)
+
+            if obj.content:
+                self.load(obj.content)
             else:
                 self.clear()
-                await messenger(self.fsc.websocket, f'{self.i_name}_no_content', f"Determined {self.i_name} no content, using empty", "306", self.fsc.tracker_id)
-        else:
-            prim_key_id = None; db_content = ''
-            self.clear()
-            await messenger(self.fsc.websocket, f'{self.i_name}_not_exist', f"Determined {self.i_name} not exist, using empty", "306", self.fsc.tracker_id)
-
-        if not self.prim_key_id:
-            self.prim_key_id = prim_key_id
 
     def destroy(self):
         if not self.is_destroyed:
             self.reset()
             self.fsc = None
             self.is_destroyed = True
-

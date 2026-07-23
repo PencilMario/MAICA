@@ -5,7 +5,6 @@ This handles LLM involving MFocus procedures.
 import asyncio
 
 from typing import *
-from dataclasses import dataclass
 from .agent_modules import AgentTools
 from maica.mtools import providers
 from maica.maica_utils import *
@@ -29,13 +28,19 @@ class MfPipeliner():
 
     def _reset_session(self):
         self.mf_session = MaicaSession()
-        self.mf_session.default_target_lang = self.fsc.maica_settings.basic.target_lang
 
     def reset(self):
         self._reset_tools()
         self._reset_session()
 
-    def __init__(self, fsc: FullSocketsContainer, sp: SessionPersistent):
+    def __init__(
+            self,
+            org_session: MaicaSession,
+            fsc: FullSocketsContainer,
+            sp: SessionPersistent,
+
+        ):
+        self.org_session = org_session
         self.fsc = fsc
         self.sp = sp
         self.reset()
@@ -45,7 +50,7 @@ class MfPipeliner():
         """If MVista tool should be used."""
         return (
             not is_mcore_vl()
-            and bool(self.settings.temp.mv_imgs)
+            and bool(self.fsc.maica_settings.temp.mvista.mv_imgs)
         )
 
     def _construct_tools(self):
@@ -126,7 +131,7 @@ class MfPipeliner():
             ),
             requiredParams=[
                 _Wtp(
-                    name="ser_query",
+                    name="query",
                     type="string",
                     description=_Bt(
                         "需要搜索的内容, 应当是简洁明确的关键词.",
@@ -165,7 +170,7 @@ class MfPipeliner():
                     name="conclusion",
                     type=["string", "null"],
                     description=_Bt(
-                        "总结你获取的信息和对应的推理, 并整理成一到数个简洁的句子, 如'现在是上午九点, 因此适合吃早餐; 且天气凉爽, 因此适合户外活动'. 留空以表示没有值得总结的信息."
+                        "总结你获取的信息和对应的推理, 并整理成一到数个简洁的句子, 如'现在是上午九点, 因此适合吃早餐; 且天气凉爽, 因此适合户外活动'. 留空以表示没有值得总结的信息.",
                         "Conclude information you acquired and corresponding reasoning, into one or several concise and clear sentences, e.g., 'It's 9:00 in the morning, suitable for breakfast; The weather is cool, good for exercising'. Leave empty if no information worths concluding."
                     )
                 )
@@ -177,26 +182,6 @@ class MfPipeliner():
                 "此工具用于表示工具调用完成. 若你已调用了所有其它必要的工具, 或不需要调用任何其它工具, 则在准备作答前调用此工具.",
                 "This tool indicates tool calling has finished. Call this tool when you've finished calling every other necessary tool, or if you don't need any other tool, and are ready to answer."
             )
-        )
-
-        # Then we make the namespaces.
-        # Or should we? Perhaps not since they divide the tools and model cannot see though it.
-        # We don't use them.
-        t1_tools = _Wtn(
-            name="local_tools",
-            description=_Bt(
-                "本地类工具, 相对常用, 应优先考虑.",
-                "Local tools, relatively commonly used, consider at higher priority."
-            ),
-            tools=[]
-        )
-        t2_tools = _Wtn(
-            name="internet_tools",
-            description=_Bt(
-                "联网类工具, 在需要时使用.",
-                "Internet tools, use when you need to."
-            ),
-            tools=[]
         )
 
         # Then we make the tools collection.
@@ -221,16 +206,30 @@ class MfPipeliner():
         tools_jsc = [i.to_json_schema(self.fsc.maica_settings.basic.target_lang) for i in tools]
         self.tools = tools_jsc
     
-    def _construct_messages(self, query):
-        """The query construction. Following tools' handling goes to another handler."""
+    def _construct_messages(self):
+        """
+        The query construction.
+        """
         # Just to save some typing
         target_lang = self.fsc.maica_settings.basic.target_lang
 
+        # We're copying session_item to preserve known_info
+        session_item: MaicaSessionItem = self.org_session[-1].model_copy()
+
         if self._mfocus_impl_mvista:
             image_word = " [图片]" if self.settings.basic.target_lang == 'zh' else " [Image]"
-            query += image_word
+            session_item.content += image_word
 
         if not len(self.mf_session):
+
+            # handle mf_context_rnds
+            num_org_rnds = self.fsc.maica_settings.extra.mf_context_rnds
+            num_org_items = num_org_rnds * 2
+
+            if num_org_items:
+                org_items = self.org_session[-(num_org_items + 1):-1]
+            else:
+                org_items = []
 
             if self.fsc.maica_settings.extra.mf_llm_concl:
                 taskend_word = "作出总结" if target_lang == 'zh' else "draw a conclusion"
@@ -242,42 +241,41 @@ class MfPipeliner():
                 _Bt(
 f"""\
 你是一个人工智能助手, 你的任务是调用工具, 以作为角色"莫妮卡"回答用户的问题.
+- 在设定上, 你是用户[player]的女友, 并深爱着对方.
 最终你应该通过调用工具的方式{taskend_word}. 如果该问题不需要工具, 你可以直接{taskend_word}.\
 """,
 f"""\
 You are a helpful assistant, your task is using tools to respond user's query as charcater "Monika".
+- According to the setting, you're user [player]'s girlfriend, and love them a lot.
 Finally you should {taskend_word} with a corresponding tool. If the message does not require tools to answer, you can {taskend_word} directly.\
 """
                 ),
             )
             self.mf_session.append(system)
 
-        query_item = MaicaSessionItem(
-            "user",
-            query,
-        )
-        self.mf_session.append(query_item)
+            self.mf_session.extend(org_items)
 
-    async def _query_response(self, query, known_info: Optional[str] = None):
+        self.mf_session.append(session_item)
+
+    async def _query_response(self):
         """
         Now that we have tools and messages, we can finally launch completion.
-        - known_info: we already have something known while calling this, so we let MFocus know it too.
         
         Returns:
         - str: generated_guidance
         - dict: tools_results
         """
         self._construct_tools()
-        self._construct_messages(query)
+        self._construct_messages()
 
         completion_args = {
-            "messages": self.mf_session.utilize(
+            "input": self.mf_session.utilize(
                 manual_prompt=True,
                 # He needs these informations
                 # ignore_additions=True,
             ),
             "tools": self.tools,
-            "response_format": {"type": "text"},
+            "stream": True,
 
             # We force tool calling to make it eventually use a stopping tool
             # This will likely make mf_llm_concl far more stable
@@ -293,7 +291,7 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
         conversation_rnd_end = False
 
         async def tools_loop(a_tool_calls: AsyncIterator[ToolCall]):
-            nonlocal tools_looped_rnds
+            nonlocal tools_looped_rnds, conversation_rnd_end
             tools_looped_rnds += 1
 
             # Prepare a toolbox
@@ -335,33 +333,71 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
 
                             # We can theoretically keep all resps, but that's not useful I think.
                             # In case that's really necessary, just use mf_llm_concl
-                            tools_results["tool_name"] = (text, body)
+                            tools_results[tool_name] = (text, body)
 
                         return text
                     
-            async for tool_call in a_tool_calls:
+            async def make_call(tool_call: ToolCall):
+                nonlocal conversation_rnd_end
 
-                # Create maica compatible item
-                maica_tool_call = MaicaSessionItem(
-                    preserved=tool_call.model_dump()
+                # Log and send tool call
+                await self.fsc.messenger(
+                    'maica_mfocus_tool_call',
+                    f"MFocus calling tool {tool_call.name}: {tool_call.arguments}, retrieving tool response...",
+                    201,
+                    type=MsgType.PRIM_LOG,
                 )
-                self.mf_session.append(maica_tool_call)
 
                 # Then if we need to respond
                 tool_response = await tool_respond(tool_call)
+
                 if not tool_response:
                     conversation_rnd_end = True
+
+                else:
+
+                    # Create maica compatible item
+                    maica_tool_call = MaicaSessionItem(
+                        preserved=tool_call.openai_dump()
+                    )
+                    self.mf_session.append(maica_tool_call)
+
+                    await self.fsc.messenger(
+                        'maica_mfocus_tool_resp',
+                        f"MFocus tool {tool_call.name} responded: {tool_response}",
+                        200,
+                        type=MsgType.INFO,
+                    )
+
+                    # Then create the tool response item
+                    maica_tool_response = MaicaSessionItem(
+                        preserved={
+                            "type": "function_call_output",
+                            "call_id": tool_call.call_id,
+                            "output": tool_response,
+                        }
+                    )
+                    self.mf_session.append(maica_tool_response)
+
+            call_tasks = []
+            async for tool_call in a_tool_calls:
+                
+                call_tasks.append(
+                    asyncio.create_task(
+                        make_call(tool_call)
+                    )
+                )
+
+                if conversation_rnd_end:
                     break
 
-                # Then create the tool response item
-                maica_tool_response = MaicaSessionItem(
-                    preserved={
-                        "type": "function_call_output",
-                        "call_id": tool_call.call_id,
-                        "output": tool_response,
-                    }
-                )
-                self.mf_session.append(maica_tool_response)
+            await asyncio.gather(*call_tasks)
+
+        await self.fsc.messenger(
+            'maica_mfocus_tool_start',
+            "MFocus started, sending first query...",
+            200,
+        )
 
         conn = self.fsc.mfocus_conn
         while (
@@ -375,9 +411,20 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
             )
         ):
 
-            # Generation
-            task, a_reasoning, a_content, a_tool_calls = await llm_request(conn, **completion_args)
-            tl = await tools_loop(a_tool_calls)
+            # Include tool calls and outputs appended by the previous round.
+            completion_args["input"] = self.mf_session.utilize(
+                manual_prompt=True,
+                # Additions have been added once, so stop adding another time
+                ignore_additions=True,
+            )
+            async with llm_request(conn, **completion_args) as (task, a_reasoning, a_content, a_tool_calls):
+                await tools_loop(a_tool_calls)
+
+        await self.fsc.messenger(
+            'maica_mfocus_tool_fin',
+            f"MFocus ended due to {'stopping tool' if conversation_rnd_end else 'rounds limit'}, generated guidance is {generated_guidance or 'EMPTY'}",
+            200,
+        )
 
         return generated_guidance, tools_results
     
@@ -410,17 +457,18 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
         cleaned_tools_results = {
             k: v[0]
             for k, v in sorted_tools_results.items()
-            if v[1]
+            if v[0] and v[1]
         }
 
         return cleaned_tools_results
     
-    async def run_mf_pipeline(self, query: str):
+    async def run_mf_pipeline(self):
         """
         This wraps _query_response, since it's designed to be multiple-rounds compatible.
         This wrapping is single-round, fits the actual use case.
         """
-        generated_guidance, tools_results = await self._query_response(query)
+        generated_guidance, tools_results = await self._query_response()
         parsed_results = self.parse_tools_results(tools_results)
+
         self.reset()
         return generated_guidance, parsed_results

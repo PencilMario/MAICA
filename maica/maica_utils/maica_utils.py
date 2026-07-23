@@ -20,7 +20,8 @@ import websockets
 
 from typing import *
 from tenacity import *
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, TypeAdapter, ValidationError
+from pydantic_core import core_schema
 from pydantic.dataclasses import dataclass as pdataclass
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -128,12 +129,12 @@ class CommonMaicaException(Exception):
     
 class CommonMaicaError(CommonMaicaException):
     """This is a common MAICA error."""
-    def __init__(self, message=None, error_code='500', status='maica_unidentified_error', send=None, print=None):
+    def __init__(self, message=None, error_code=500, status='maica_unified_error', send=None, print=None):
         super().__init__(message, error_code, status, send, print)
     
 class CommonMaicaWarning(CommonMaicaException):
     """This is a common MAICA warning."""
-    def __init__(self, message=None, error_code='400', status='maica_unidentified_warning', send=None, print=None):
+    def __init__(self, message=None, error_code=400, status='maica_unified_warning', send=None, print=None):
         super().__init__(message, error_code, status, send, print)
 
     @property
@@ -171,19 +172,15 @@ class MaicaInternetWarning(CommonMaicaWarning):
     """This suggests the backend request action is not behaving normal."""
 
 RETRYABLE_EXCEPTIONS = (
-    # aiomysql.OperationalError,
-    # aiomysql.InterfaceError,
-    # ConnectionError,
-    # TimeoutError,
-    # httpx.TransportError,
-    # openai.APIConnectionError,
-    # openai.APITimeoutError,
-    # openai.RateLimitError,
-    # json.JSONDecodeError,
-    # MaicaInternetWarning,
-
-    # This is too unstable.
-    Exception,
+    aiomysql.OperationalError,
+    aiomysql.InterfaceError,
+    ConnectionError,
+    TimeoutError,
+    httpx.TransportError,
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.RateLimitError,
+    openai.InternalServerError,
 )
 
 class AsyncCreator(ABC):
@@ -246,7 +243,8 @@ class LoginResult():
         for priokey in ['user_id', 'username', 'nickname', 'email']:
             setattr(self, priokey, kwargs.get(priokey))
         if kwargs.get('is_verified'):
-            assert self.user_id and self.username and self.email, "Verification essentials incomplete"
+            if not (self.user_id and self.username and self.email):
+                raise ValueError("Verification essentials incomplete")
         for key in ['is_verified', 'message']:
             setattr(self, key, kwargs.get(key))
 
@@ -329,13 +327,11 @@ class Decos():
         min_wait: float=1,
         max_wait: float=10,
         retry_exceptions=RETRYABLE_EXCEPTIONS,
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    ):
         """Mostly for instance methods."""
         async def log_retry(retry_state):
-            self = retry_state.args[0] if retry_state else None
-            rsc = getattr(self, 'rsc', None); name = getattr(self, 'name', 'anon_conn')
-            websocket = rsc.websocket if rsc else None; tracker_id = rsc.tracker_id if rsc else ''
-            await messenger(websocket=websocket, status=f'{name}_temp_failure', info=f'{name} temporary failure, retrying {retry_state.attempt_number} time...', code='304', tracker_id=tracker_id, type=MsgType.WARN)
+            e = retry_state.outcome.exception()
+            sync_messenger(info=f"Connection temporarily failed: {str(e)}", type=MsgType.WARN)
 
         retry_decorator = retry(
             stop=stop_after_attempt(max_attempts),
@@ -364,105 +360,19 @@ class Decos():
             return result
         return wrapper
 
-    def catch_exceptions(func):
-        """Used for connection_utils."""
-        @functools.wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            name = getattr(self, 'name', 'anon_conn')
-            try:
-                return await func(self, *args, **kwargs)
-            except CommonMaicaException as ce:
-                raise ce
-            except websockets.WebSocketException as we:
-                raise we
-            except Exception as e:
-
-                match self:
-                    case i if getattr(i, "db_type", None) in ("mysql", "sqlite"):
-                        exception_cls = MaicaDbError
-                        conn_type = 'db_conn'
-                    case i if getattr(i, "db_type", None) in ("milvus",):
-                        exception_cls = MaicaDbError
-                        conn_type = 'vdb_conn'
-                    case _:
-                        exception_cls = MaicaResponseError
-                        conn_type = 'ai_conn'
-
-                raise exception_cls(f'{name} operation failed: {str(e)}', '502', f'{conn_type}_failed') from e
-        return wrapper
-
-    def escape_sqlite_expression(func):
-        """Used to transform a MySQL expression to SQLite one."""
-        @functools.wraps(func)
-        def wrapper(self, expression: str, *args, **kwargs):
-            expression_new = ReUtils.re_sub_sqlite_escape.sub('?', expression)
-            return func(self, expression_new, *args, **kwargs)
-        return wrapper
-    
-    def ro_expression(func):
-        """Used to keep DB query ro."""
-        @functools.wraps(func)
-        def wrapper(self, expression: str, *args, **kwargs):
-            assert not is_word_start(expression.lower(), *_WRITE_KWDS), f'query_get got write expression {expression}'
-            return func(self, expression, *args, **kwargs)
-        return wrapper
-    
-    def wo_expression(func):
-        """Used to keep DB query wo."""
-        @functools.wraps(func)
-        def wrapper(self, expression: str, *args, **kwargs):
-            assert not is_word_start(expression.lower(), *_READ_KWDS), f'query_modify got read expression {expression}'
-            return func(self, expression, *args, **kwargs)
-        return wrapper
-
-    def report_data_error(func):
-        """Raises when the requested action cannot be done because of corrupted data."""
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                raise MaicaInputWarning(f'Acquired persistent not acceptable: {str(e) or "Assertion"}', '405', 'maica_agent_persistent_bad') from e
-        return wrapper
-
-    def report_reading_error(func):
-        """Raises when the requested variable cannot be read before assignment."""
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                raise MaicaInputError(f'Access before necessary assignment', '500', 'maica_settings_read_rejected') from e
-        return wrapper
-
-    def report_limit_warning(func):
-        """Raises when the input param coming from user is out of bound."""
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                raise MaicaInputWarning(f'Input param not acceptable: {str(e) or "Assertion"}', '422', 'maica_settings_param_rejected') from e
-        return wrapper
-
-    def report_limit_error(func):
-        """Raises when the input param coming from program is out of bound."""
-        @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            try:
-                assert not getattr(self, '_lock', None)
-                return func(self, *args, **kwargs)
-            except Exception as e:
-                raise MaicaInputError(f'Input param not acceptable', '500', 'maica_settings_param_rejected') from e
-        return wrapper
-
 class ExplainUrl():
     """For convenience."""
     def __init__(self, url):
         parse_result = urlparse(url)
-        self.scheme, self.netloc, self.path, self.params, self.query, self.fragment = parse_result
+        self.scheme = parse_result.scheme
+        self.netloc = parse_result.netloc
+        self.path = parse_result.path
+        self.params = parse_result.params
+        self.query = parse_result.query
+        self.fragment = parse_result.fragment
         self.hostname, self.port = parse_result.hostname, parse_result.port
-        self.is_url = bool(self.netloc); self.is_local = not self.is_url
+        self.is_url = bool(self.netloc)
+        self.is_local = not self.is_url
         if not self.port:
             match self.scheme:
                 case "http":
@@ -487,6 +397,8 @@ class BilingualText():
             self.en = self.zh
         if self.auto is None:
             self.auto = self.en
+
+        return self
 
     def __bool__(self):
         return bool(self.zh or self.en or self.auto)
@@ -527,13 +439,67 @@ class BilingualText():
         else:
             return self.auto
 
-@dataclass
-class Desc():
-    """Just a description."""
-    desc: str
+class PydUpdateMixin(BaseModel):
+    """This adds update() method to pydantic models."""
+    def update(self, m):
+        """Updating from a dict, a pydantic object, or something alike."""
+        if isinstance(m, BaseModel):
+            m = m.model_dump()
 
-    def __str__(self):
-        return self.desc
+        updated = set()
+        for k, v in m.items():
+            if k in self.__class__.model_fields:
+                setattr(self, k, v)
+                updated.add(k)
+        return updated
+
+class PydHardResetMixin(BaseModel):
+    """This adds reset() method to pydantic models (id/vfc)."""
+    def reset(self):
+        """Hard reset all id/vfc values to default."""
+        _crd_fields = ('_user_id', '_username', '_nickname', '_email')
+        for f in _crd_fields:
+            if hasattr(self, f):
+                setattr(self, f, None)
+
+class PydSoftResetMixin(BaseModel):
+    """This adds reset() method to pydantic models (norm)."""
+    def reset(self):
+        for k, v in self.__class__.model_fields.items():
+            setattr(self, k, v.get_default(call_default_factory=True))
+        self.model_fields_set.clear()
+
+class RobustList[T](list[T]):
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        item_type = get_args(source_type)[0]
+        item_adapter = TypeAdapter(item_type)
+
+        list_schema = handler.generate_schema(list[item_type])
+
+        def filter_before(value: Any):
+            if not isinstance(value, list):
+                return value
+
+            filtered = []
+
+            for item in value:
+                try:
+                    filtered.append(item_adapter.validate_python(item))
+                except ValidationError:
+                    pass
+
+            return filtered
+
+        return core_schema.no_info_before_validator_function(
+            filter_before,
+            list_schema,
+        )
+
+class SafeFormatDict(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"
 
 class DummyClass():
     """Yes, dummy class."""
@@ -541,13 +507,19 @@ class DummyClass():
         for k, v in kwargs.items():
             setattr(self, k, v)
 
-def default(exp, default, default_list: list=[None]) -> any:
+def default(exp, default, default_list: Collection=(None, )) -> Any:
     """If exp is in default list(normally None), use default."""
     return default if exp in default_list else exp
 
-def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) -> str:
-    if not (isinstance(content, (str, list, dict, bool)) or content is None):
+def wrap_ws_formatter(code, status, content, type, **kwargs) -> str:
+    if not (
+        isinstance(
+            content,
+            (str, list, dict, bool)
+        ) or content is None
+    ):
         content = str(content)
+
     output = {
         "code" : code,
         "status" : status,
@@ -555,8 +527,9 @@ def wrap_ws_formatter(code, status, content, type, deformation=False, **kwargs) 
         "type" : type,
         "timestamp" : time.time(),
     }
+
     output.update(kwargs)
-    return json.dumps(output, ensure_ascii=deformation)
+    return json.dumps(output, ensure_ascii=False)
 
 def ellipsis_str(input: Any, limit=80) -> str:
     """It converts anything to str and ellipsis it."""
@@ -605,7 +578,7 @@ def alt_tools(tools: list) -> list:
                 new_tools[-1]['type'] = 'function'
             return new_tools
         
-def clean_msgs(msgs: list[dict, ChatCompletionMessage], include: Optional[list[str]]=None, exclude: Optional[list[str]]=None) -> list[dict]:
+def clean_msgs(msgs: list[dict | ChatCompletionMessage], include: Optional[list[str]]=None, exclude: Optional[list[str]]=None) -> list[dict]:
     """Clean a set of OpenAI msgs."""
     def _convert_msg(msg: Union[dict, ChatCompletionMessage]):
         if isinstance(msg, ChatCompletionMessage):
@@ -670,30 +643,60 @@ def proceed_common_text(text: str, is_json=False) -> Union[str, list, dict]:
         answer_fin = ''
     return answer_fin
 
-@overload
-async def messenger(websocket=None, status='', info='', code='0', tracker_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> None: ...
-
 async def messenger(websocket=None, *args, **kwargs) -> None:
     """Together with websocket.send()."""
     ws_tuple = sync_messenger(*args, **kwargs)
     if websocket and ws_tuple:
         await websocket.send(wrap_ws_formatter(*ws_tuple))
 
-def sync_messenger(status='', info='', code='0', tracker_id='', error: Optional[CommonMaicaException]=None, type='', color='', add_time=True, no_print=False, no_raise=False, **kwargs) -> tuple:
+
+def sync_messenger(
+        status = '',
+        info = '',
+        code = 0,
+        tracker_id = '',
+        error: Optional[CommonMaicaException] = None,
+        type = '',
+        color = '',
+        no_print = False,
+        **kwargs
+    ) -> tuple:
     """It could handle most log printing and exception raising jobs pretty automatically."""
+
+    # For separator lines
     try:
         term_v = os.get_terminal_size().columns
-    except:
+    except OSError:
         term_v = 40
     rep2 = int(term_v / 2)
     rep1 = int(rep2 - 20)
 
-    if error:
-        status = error.status if not status else status; info = error.message if not info else info; code = error.error_code if code == "0" else code
-        no_print = False if not error.print is False else True
+    # The old style allowed numeric codes encoded as strings. Normalize before
+    # doing comparisons so warnings with e.g. error_code="400" remain usable.
+    code = int(code or (error.error_code if error else 0) or 0)
 
+    # Exception parsing, it's a convenience method
+    if error:
+        status = error.status if not status else status
+        info = error.message if not info else info
+        code = error.error_code if not code else code
+        no_print = False if error.print is not False else True
+
+        if (
+            isinstance(error, CommonMaicaError)
+            or code >= 500
+            or int(G.A.DEBUG_WARNS)
+        ):
+            print_info = "\n" + "".join(traceback.format_exception(error))
+        else:
+            print_info = info
+
+    else:
+        print_info = info
+
+    # Type inferring, in case we're too lazy to write
     if not type:
-        match int(code):
+        match code:
             case 0:
                 type = "log"
             case x if 100 <= x < 200 or 1000 <= x:
@@ -706,75 +709,148 @@ def sync_messenger(status='', info='', code='0', tracker_id='', error: Optional[
                 type = "warn"
             case x if 500 <= x < 1000:
                 type = "error"
+    elif not code:
+        match type:
+            case MsgType.CARRIAGE:
+                code = 100
+            case MsgType.DEBUG:
+                code = 200
+            case MsgType.INFO:
+                code = 300
+            case MsgType.WARN:
+                code = 400
+            case MsgType.ERROR:
+                code = 500
+            case _:
+                code = 0
 
-    prefix = uscore_words_upper(type)
+    # Uppercase the prefix
+    prefix = type.upper()
 
-    if 100 <= int(code) < 200 or type == "plain":
-        msg_print = str(info)
+    # If stream message
+    if (
+        100 <= code < 200
+        or type == "plain"
+    ):
+        msg_print = str(print_info)
         msg_send = info
         
     else:
+
+        # Forming display
         msg_print = f"<{prefix}>"
-        msg_print = msg_print.ljust(10)
-        msg_print += f"[{time.strftime('%Y-%m-%d %H:%M:%S')}]" if add_time else ''; msg_print += f"-[{str(code)}]" if code else ''
+        msg_print = msg_print.ljust(11)
+
+        msg_print += (
+            f"[{datetime.datetime.now().isoformat(timespec="seconds")}]"
+            f"-[{code}]"
+        )
         msg_print = msg_print.ljust(40)
-        msg_print += f": {str(info)}" if not str(info).startswith('\n') else f"{'-=' * rep1}{str(info)}\n{'-=' * rep2}"
-        msg_print += f"; traceray ID {tracker_id}" if tracker_id else ''
+
+        # If this is a multi-line print, we wrap it with separators
+        if str(print_info).startswith('\n'):
+            msg_print += (
+                f"{'-=' * rep1}"
+                f"{str(print_info)}"
+            )
+
+            if tracker_id:
+                msg_print += f"\n<{tracker_id}>"
+
+            msg_print += f"\n{'-=' * rep2}"
+
+        else:
+            msg_print += f": {str(print_info).replace('\n', ' ')}"
+
+            if tracker_id:
+                msg_print += f" <{tracker_id}>"
+
+        # Forming send
         msg_send = info
+        
         if type == 'error' and int(G.A.NO_SEND_ERROR):
             msg_send = "A critical exception happened serverside, contact administrator"
-        if tracker_id and isinstance(info, str):
-            msg_send += f" -- your traceray ID is {tracker_id}"
 
-    frametrack_dict = {"error": 99, "warn": 1}
-    if type in frametrack_dict:
+        if tracker_id and isinstance(info, str):
+            msg_send += f" <{tracker_id}>"
+
+    # Frame tracking settings
+    frametrack_d = {"error": 99, "warn": 2}
+    if type in frametrack_d:
         stack = inspect.stack()
         stack.pop(0)
         stack.pop(0)
 
-    if (not no_print) and (not _silent):
+    # We do not print if no_print or _silent
+    if (
+        not no_print
+        and not _silent
+    ):
+        
+        # Per-type behavior
         match type:
+
             case "plain":
-                print((color or '') + msg_print, end='', flush=True)
+                print(
+                    (color or '')\
+                    + msg_print,
+                    end='',
+                    flush=True
+                )
                 lmlogger.buff(msg_print)
+                # Outputing plain normally indicates streaming done
+                # This could be messy if multiple streaming happen simultaneously, but no better approach
                 lmlogger.flush()
+
             case "carriage":
                 if 100 <= int(code) < 200:
                     print((color or colorama.Fore.LIGHTGREEN_EX) + msg_print, end='', flush=True)
                     lmlogger.buff(msg_print)
                 else:
+                    # If it's ending announcement, treat like info
                     logger.info((color or colorama.Fore.LIGHTGREEN_EX) + msg_print)
+
             case "debug":
                 logger.debug((color or colorama.Fore.LIGHTBLACK_EX) + msg_print)
+
             case "info":
                 logger.info((color or colorama.Fore.GREEN) + msg_print)
+
             case "log":
                 logger.info((color or colorama.Fore.BLUE) + msg_print)
+
             case "prim_log":
                 logger.info((color or colorama.Fore.LIGHTBLUE_EX) + msg_print)
+
             case "sys":
                 logger.info((color or colorama.Fore.MAGENTA) + msg_print)
+
             case "prim_sys":
                 logger.info((color or colorama.Fore.LIGHTMAGENTA_EX) + msg_print)
+
             case "recv":
                 logger.info((color or colorama.Fore.CYAN) + msg_print)
+
             case "prim_recv":
                 logger.info((color or colorama.Fore.LIGHTCYAN_EX) + msg_print)
+
             case "warn":
-                if 'warn' in frametrack_dict:
-                    for stack_layer in stack[frametrack_dict['warn']::-1]:
+                if 'warn' in frametrack_d:
+                    for stack_layer in stack[frametrack_d['warn']::-1]:
                         logger.warning(color or colorama.Fore.YELLOW + f"• WARN happened when executing {stack_layer.function} at {stack_layer.filename}#{stack_layer.lineno}:")
                 logger.warning((color or colorama.Fore.LIGHTYELLOW_EX) + msg_print)
+
             case "error":
-                if 'error' in frametrack_dict:
-                    for stack_layer in stack[frametrack_dict['error']::-1]:
+                if 'error' in frametrack_d:
+                    for stack_layer in stack[frametrack_d['error']::-1]:
                         logger.error((color or colorama.Fore.RED) + f"! ERROR happened when executing {stack_layer.function} at {stack_layer.filename}#{stack_layer.lineno}:")
                 logger.error((color or colorama.Fore.LIGHTRED_EX) + msg_print)
-    if error and not no_raise:
-        raise error
+
+    # This is pretty deprecated but leave it be
     if error and error.send is False:
         return
-    ws_tuple = (code, status, msg_send, type) if not kwargs.get('deformation') else (code, status, msg_send, type, kwargs.get('deformation'))
+    
+    ws_tuple = (code, status, msg_send, type)
     return ws_tuple
 
 def load_env(key) -> str:
@@ -792,21 +868,26 @@ async def wrap_run_in_exc(loop, func, *args, **kwargs) -> any:
 def limit_length[T](col: list[T], limit: int) -> list[T]:
     return random.sample(col, limit) if limit < len(col) else col
 
-async def dld_json(url, use_proxy=True, ua_disguise=False, method='get', carriage=None) -> json:
-    """Get JSON context from an endpoint."""
-    if ua_disguise:
-        ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36"
+def get_ua(disguise = False):
+    """Gets an UA for web requests."""
+    if disguise:
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36"
     else:
         ua = f"MaicaDataFetcher/1.0 (dcc@monika.love) httpx/{httpx.__version__}"
-    headers = {'User-Agent': ua}
+    return ua
+
+async def dld_json(url, use_proxy=True, ua_disguise=False, method='get', carriage=None) -> Any:
+    """Get JSON context from an endpoint."""
+    headers = {'User-Agent': get_ua(ua_disguise)}
 
     @Decos.conn_retryer_factory()
     async def _dld_json(fake_self, url):
         nonlocal headers
-        async with httpx.AsyncClient(proxy=G.A.PROXY_ADDR if use_proxy else None) as client:
+        async with httpx.AsyncClient(proxy=(G.A.PROXY_ADDR or None) if use_proxy else None) as client:
             exparams = {"params": carriage} if method == 'get' else {"json": carriage}
-            res = (await getattr(client, method)(url, headers=headers, **exparams)).json()
-            return res
+            response = await getattr(client, method)(url, headers=headers, **exparams)
+            response.raise_for_status()
+            return response.json()
 
     try:
         res = await _dld_json(DummyClass(name="dld_json"), url)
@@ -845,7 +926,10 @@ def refill_date(text: str) -> datetime.datetime:
 
 def add_seq_suffix(seq: int) -> str:
     """For English seq."""
-    match int(seq) % 10:
+    seq = int(seq)
+    if 11 <= seq % 100 <= 13:
+        return f"{seq} th"
+    match seq % 10:
         case 1:
             st = 'st'
         case 2:
@@ -854,7 +938,7 @@ def add_seq_suffix(seq: int) -> str:
             st = 'rd'
         case _:
             st = 'th'
-    return f'{str(seq)} {st}'
+    return f'{seq} {st}'
 
 def clean_text(text: str) -> str:
     """
@@ -898,7 +982,7 @@ def beautify_time(dt: datetime.time, target_lang: Literal['zh', 'en', 'auto'] = 
     """
     _Bt = BilingualText
 
-    match time:
+    match dt:
         case time if time.hour < 4:
             time_range = _Bt('半夜', ' at midnight')
         case time if 4 <= time.hour < 6:
@@ -951,7 +1035,7 @@ def beautify_date(dt: datetime.date, target_lang: Literal['zh', 'en', 'auto'] = 
                 season = su
         sh = _Bt("(南半球)", "(South hemisphere)")
     else:
-        match m:
+        match dt.month:
             case m if 3 <= m < 6:
                 season = sp
             case m if 6 <= m < 9:
@@ -974,19 +1058,33 @@ def beautify_date(dt: datetime.date, target_lang: Literal['zh', 'en', 'auto'] = 
 
     return date_friendly
 
-async def hash_sha256(str) -> str:
+async def hash_sha256(value: str | bytes) -> str:
     """Get SHA256 for a string."""
-    def hash_sync(str):
-        return hashlib.new('sha256', str).hexdigest()
-    return await wrap_run_in_exc(None, hash_sync, str)
+    def hash_sync(value):
+        data = value.encode("utf-8") if isinstance(value, str) else value
+        return hashlib.new('sha256', data).hexdigest()
+    return await asyncio.to_thread(hash_sync, value)
 
 def is_mcore_vl():
     """If mcore is same model with mvista."""
-    return bool(G.A.MCORE_ADDR == G.A.MVISTA_ADDR and G.A.MCORE_CHOICE == G.A.MVISTA_CHOICE)
+    return bool(
+        G.A.MCORE_ADDR
+        and G.A.MVISTA_ADDR
+        and G.A.MCORE_ADDR == G.A.MVISTA_ADDR
+        and G.A.MCORE_CHOICE == G.A.MVISTA_CHOICE
+    )
 
 def is_rag_enabled():
     """If this server instance could utilize RAG."""
     return bool(G.A.EMBEDDING_ADDR and G.A.MILVUS_ADDR)
+
+def is_auth_sqlite():
+    """If auth_db is sqlite, else mysql."""
+    return bool(G.A.DB_ADDR == "sqlite")
+
+def is_data_sqlite():
+    """If data_db is sqlite, else mysql."""
+    return bool(G.A.DB_ADDR == "sqlite")
 
 def to_str(obj: str | BilingualText, target_lang: Literal['zh', 'en', 'auto']='zh'):
     """Call to_str if bt, else as-is."""
@@ -997,14 +1095,15 @@ def to_str(obj: str | BilingualText, target_lang: Literal['zh', 'en', 'auto']='z
 
 def sysstruct() -> Literal['Windows', 'Linux']:
     sysstruct = platform.system()
-    assert sysstruct in ['Windows', 'Linux'], 'Your system not supported'
+    if sysstruct not in ['Windows', 'Linux']:
+        raise RuntimeError(f"Unsupported operating system: {sysstruct}")
     return sysstruct
 
 if __name__ == "__main__":
     async def test():
         from maica import init
         init()
-        res = await dld_json(f"https://zh.wikipedia.org/w/api.php?action=query&format=json&list=search&redirects=1&utf8=1&formatversion=2&srsearch=incategory:各时期火山事件&srnamespace=14&srlimit=250&sroffset=0&srprop=", True)
+        res = await dld_json("https://zh.wikipedia.org/w/api.php?action=query&format=json&list=search&redirects=1&utf8=1&formatversion=2&srsearch=incategory:各时期火山事件&srnamespace=14&srlimit=250&sroffset=0&srprop=", True)
         print(res)
 
     asyncio.run(test())

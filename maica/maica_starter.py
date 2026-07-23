@@ -1,43 +1,38 @@
 import os
-import sys
-import traceback
+import argparse
+import asyncio
+import colorama
+import signal
 from typing import *
-from pathlib import Path
 from dotenv import load_dotenv
 from packaging.version import parse
-try:
-    from maica import maica_ws
-except Exception:
-    current_dir = Path(__file__).parent
-    parent_dir = current_dir.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
 
 try:
     import mtts
     from mtts.mtts_utils import locater as mtts_locater
     mtts_installed = True
-except Exception:
+except ImportError:
     mtts_installed = False
-
-import asyncio
-import argparse
-import colorama
 
 from maica import maica_ws, maica_http, common_schedule, silent as _silent
 from maica.maica_utils import *
 from maica.initializer import *
-
-_CHAT_CONNS_LIST = [
-    'auth_pool', 'maica_pool', 'vector_pool',
-    'mcore_conn', 'mfocus_conn', 'mvista_conn', 'mnerve_conn', 'embedding_conn', 'reranking_conn',
-]
-_TTS_CONNS_LIST = ['auth_pool', 'maica_pool']
-
 from maica.initializer import pkg_init_initializer
 from maica.maica_http import pkg_init_maica_http
 from maica.maica_utils import pkg_init_maica_utils
 from maica.mtools import pkg_init_mtools
+
+_CHAT_CONNS_LIST = [
+    'vector_pool',
+    'mcore_conn',
+    'mfocus_conn',
+    'mvista_conn',
+    'mnerve_conn',
+    'embedding_conn',
+    'reranking_conn',
+]
+_TTS_CONNS_LIST = []
+
 def pkg_init_maica():
     pkg_init_initializer()
     """Prio 0"""
@@ -51,14 +46,14 @@ def pkg_init_maica():
         make_folders.append("fs_storage/mtts")
     for f in make_folders:
         fr = get_inner_path(f)
-        if not os.path.exists(fr):
-            os.makedirs(fr)
+        os.makedirs(fr, exist_ok=True)
 
 colorama.init(autoreset=True)
 initialized = False
+data_initialized = False
 start_target: Literal['chat', 'tts', 'all'] = 'chat'
 
-def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwargs):
+def check_params(envdir: str=None, extra_envdir: list=None, silent=False, parse_cli=True, **kwargs):
     """This will only run once. Recalling will not take effect, except passing in extra kwargs."""
     global initialized, start_target
 
@@ -75,7 +70,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
         return parser
     
     parser = init_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(None if parse_cli else [])
     start_target = args.target
     envdir = envdir or args.envdir
     silent = silent or args.silent
@@ -132,12 +127,13 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
     def get_templates():
         with open(get_inner_path('env_basis'), 'r', encoding='utf-8') as env_e:
             env_c = env_e.readlines()
-        i = 0; j = 0
-        for l in env_c:
+        i = 0
+        j = 0
+        for line in env_c:
             i += 1
-            if len(l) <= 5:
+            if len(line) <= 5:
                 j = 1
-            if j and len(l) > 5:
+            if j and len(line) > 5:
                 break
         env_c = ''.join(env_c[i - 1:])
         return env_c
@@ -145,7 +141,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
     def separate_line(title: str):
         try:
             terminal_width = os.get_terminal_size().columns
-        except:
+        except OSError:
             terminal_width = 40
         line = title.center(terminal_width, '/')
         return line
@@ -172,7 +168,7 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
                 sync_messenger(info=f'[maica-cli] Generating {env_p}...', type=MsgType.DEBUG)
                 env_f.write(env_c)
 
-        sync_messenger(info='[maica-cli] Creation succeeded, edit them yourself and then start with "maica -c .env"', type=MsgType.LOG)
+        sync_messenger(info='[maica-cli] Creation succeeded, edit it and then start with "maica -e .env"', type=MsgType.LOG)
 
     if kwargs:
         # Load extra env vars
@@ -212,34 +208,80 @@ def check_params(envdir: str=None, extra_envdir: list=None, silent=False, **kwar
             initialized = True
         except Exception as e:
             sync_messenger(info=f'[maica-init] Error: {str(e)}, quitting...', type=MsgType.ERROR)
-            exit(1)
+            if parse_cli:
+                raise SystemExit(1) from e
+            raise
 
-def check_data_init():
-    last_version = check_marking()
-    if parse(last_version) <= parse("1.0.000"):
-        generate_rsa_keys()
-        pkg_init_maica()
-        if int(load_env('MAICA_IS_REAL_ENV')):
-            asyncio.run(create_tables())
-        else:
-            print('''No real env detected, is this workflow?
+def check_data_init(exit_on_unconfigured=True):
+    global initialized, data_initialized
+    if data_initialized:
+        return
+    if not int(load_env('MAICA_IS_REAL_ENV')):
+        print('''\
+No real env detected, is this workflow?
 If it is, at least the imports and grammar are good if you see this.
 If not:
     If you're running MAICA for deployment, pass in "--envdir path/to/.env".
     If you're developing with MAICA as dependency, call maica.init(envdir='path/to/.env') after import.
     If you really want to use without manual configuration, call maica.init(ignore_envc=True) after import.
     Or, you can manually set the necessary env vars.
-Quitting...'''
-                )
-            quit(0)
-        create_marking()
+Quitting...\
+'''
+        )
+        # Allow a library caller to correct the configuration and retry init().
+        initialized = False
+        if exit_on_unconfigured:
+            raise SystemExit(0)
+        raise RuntimeError("MAICA requires a configured environment")
+
+    missing = [
+        key
+        for key in ("MAICA_DB_ADDR", "MAICA_AUTH_DB", "MAICA_DATA_DB")
+        if not load_env(key)
+    ]
+    if missing:
+        initialized = False
+        raise RuntimeError(f"Missing required database settings: {', '.join(missing)}")
+    if (
+        load_env("MAICA_DB_ADDR") == "sqlite"
+        and os.path.abspath(load_env("MAICA_AUTH_DB"))
+        == os.path.abspath(load_env("MAICA_DATA_DB"))
+    ):
+        initialized = False
+        raise RuntimeError("MAICA_AUTH_DB and MAICA_DATA_DB must be different SQLite files")
+
+    try:
+        if int(load_env("MAICA_F2B_COUNT")) <= 0 or float(load_env("MAICA_F2B_TIME")) < 0:
+            raise ValueError
+    except (TypeError, ValueError) as exc:
+        initialized = False
+        raise RuntimeError("MAICA_F2B_COUNT must be positive and MAICA_F2B_TIME non-negative") from exc
+
+    last_version = check_marking()
+    is_fresh = parse(last_version) <= parse("1.0.000")
+    if is_fresh:
+        generate_rsa_keys()
+        pkg_init_maica()
+
+        async def initialize_database():
+            try:
+                await create_tables()
+                return await migrate_async(last_version)
+            finally:
+                # Keep table creation and migrations on one loop, then make
+                # the global engines safe for the runtime loop to reuse.
+                await dispose_database_engines()
+
+        migrated = asyncio.run(initialize_database())
+
         sync_messenger(info="[maica-init] MAICA Illuminator initialization finished", type=MsgType.PRIM_SYS)
     else:
         pkg_init_maica()
         sync_messenger(info="[maica-init] Initiated marking detected, checking migrations...", type=MsgType.DEBUG)
-    migrated = migrate(last_version)
-    if migrated:
+        migrated = migrate(last_version)
+    if is_fresh or migrated:
         create_marking()
+    data_initialized = True
 
 def check_warns():
     if load_env('MAICA_DB_ADDR') == 'sqlite':
@@ -251,57 +293,73 @@ def check_warns():
     if (load_env('MAICA_MCORE_NODE') and load_env('MAICA_MCORE_USER') and load_env('MAICA_MCORE_PWD')) or (load_env('MAICA_MFOCUS_NODE') and load_env('MAICA_MFOCUS_USER') and load_env('MAICA_MFOCUS_PWD')):
         sync_messenger(info='\nOne or more NVwatch nodes detected\nNVwatch of MAICA Illuminator will try to collect nvidia-smi outputs through SSH, which can fail the process if SSH not avaliable\nIf SSH of nodes are not accessable or not wanted to be used, delete X_NODE, X_USER, X_PWD accordingly', type=MsgType.DEBUG)
 
-async def start_all(start_target: Literal['chat', 'tts', 'all']='chat'):
+async def start_all(
+    start_target: Literal['chat', 'tts', 'all']='chat',
+    shutdown_trigger=None,
+):
+    if start_target not in {'chat', 'tts', 'all'}:
+        raise ValueError(f"Unknown start target: {start_target}")
 
-    _root_csc_items = [getattr(ConnUtils, k)() for k in (_CHAT_CONNS_LIST if start_target != 'tts' else _TTS_CONNS_LIST)]
-    root_csc_items = await asyncio.gather(*_root_csc_items)
-    root_csc_kwargs = dict(zip(_CHAT_CONNS_LIST, root_csc_items))
+    root_csc_items = []
+    try:
+        connection_names = _CHAT_CONNS_LIST if start_target != 'tts' else _TTS_CONNS_LIST
+        root_csc_items = await asyncio.gather(
+            *(getattr(ConnUtils, name)() for name in connection_names)
+        )
+        root_csc_kwargs = dict(zip(connection_names, root_csc_items))
 
-    if start_target == 'chat':
-        await maica_start_all(**root_csc_kwargs)
-    elif start_target == 'tts':
-        await mtts_start_all(**root_csc_kwargs)
-    else:
-        task_chat = asyncio.create_task(maica_start_all(**root_csc_kwargs))
-        task_tts = asyncio.create_task(mtts_start_all(**root_csc_kwargs))
-        res = await asyncio.wait([
-            task_chat,
-            task_tts,
-            ], return_when=asyncio.FIRST_COMPLETED)
-        await messenger(info="First overall quit collected, quitting other tasks...", type=MsgType.DEBUG)
-        for pending in res[1]:
-            pending.cancel()
-            await pending
+        if start_target == 'chat':
+            await maica_start_all(**root_csc_kwargs, shutdown_trigger=shutdown_trigger)
+        elif start_target == 'tts':
+            await mtts_start_all(**root_csc_kwargs)
+        else:
+            await _wait_for_first(
+                [
+                    asyncio.create_task(
+                        maica_start_all(
+                            **root_csc_kwargs,
+                            shutdown_trigger=shutdown_trigger,
+                        )
+                    ),
+                    asyncio.create_task(mtts_start_all(**root_csc_kwargs)),
+                ],
+            )
+    finally:
+        sync_messenger(info="Doing final connection cleanup...", type=MsgType.DEBUG)
+        await asyncio.gather(
+            *(conn.close() for conn in root_csc_items if conn),
+            return_exceptions=True,
+        )
 
-    await messenger(info="All quits collected, doing final cleanup...", type=MsgType.DEBUG)
+    sync_messenger(info="Everything done, bye", type=MsgType.DEBUG)
 
-    close_list = []
-    for conn in root_csc_items:
-        if conn:
-            close_list.append(conn.close())
-    await asyncio.gather(*close_list)
 
-    await messenger(info="Everything done, bye", type=MsgType.DEBUG)
-    quit()
+async def _wait_for_first(tasks):
+    """Wait until one service exits, then cancel and await every sibling."""
+    done = set()
+    pending = set(tasks)
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
-async def maica_start_all(**kwargs):
+    # Propagate failures instead of turning a crashed server into a clean exit.
+    await asyncio.gather(*done)
+
+async def maica_start_all(shutdown_trigger=None, **kwargs):
 
     task_ws = asyncio.create_task(maica_ws.prepare_thread(**kwargs))
-    task_http = asyncio.create_task(maica_http.prepare_thread(**kwargs))
+    task_http = asyncio.create_task(
+        maica_http.prepare_thread(
+            **kwargs,
+            shutdown_trigger=shutdown_trigger,
+        )
+    )
     task_schedule = asyncio.create_task(common_schedule.prepare_thread(**kwargs, involve_chat=True, involve_tts=False))
 
-    res = await asyncio.wait([
-        task_ws,
-        task_http,
-        task_schedule,
-    ], return_when=asyncio.FIRST_COMPLETED)
-
-    await messenger(info="First chat quit collected, quitting other chat tasks...", type=MsgType.DEBUG)
-    for pending in res[1]:
-        pending.cancel()
-        await pending
-    await messenger(info="All chat quits collected", type=MsgType.DEBUG)
-    return
+    await _wait_for_first([task_ws, task_http, task_schedule])
 
 async def mtts_start_all(**kwargs):
 
@@ -312,23 +370,68 @@ async def mtts_start_all(**kwargs):
     task_tts = asyncio.create_task(mtts.prepare_thread(**kwargs))
     task_schedule = asyncio.create_task(common_schedule.prepare_thread(**kwargs, involve_chat=False, involve_tts=True))
 
-    res = await asyncio.wait([
-        task_tts,
-        task_schedule,
-    ], return_when=asyncio.FIRST_COMPLETED)
+    await _wait_for_first([task_tts, task_schedule])
 
-    await messenger(info="First tts quit collected, quitting other chat tasks...", type=MsgType.DEBUG)
-    for pending in res[1]:
-        pending.cancel()
-        await pending
-    await messenger(info="All tts quits collected", type=MsgType.DEBUG)
-    return
+
+async def _start_with_sigterm(target):
+    """Translate SIGTERM into task cancellation so every service can clean up."""
+    loop = asyncio.get_running_loop()
+    shutdown_requested = asyncio.Event()
+    service_task = asyncio.create_task(
+        start_all(target, shutdown_trigger=shutdown_requested.wait)
+    )
+    shutdown_task = asyncio.create_task(shutdown_requested.wait())
+    loop_handler_installed = False
+    previous_handler = None
+
+    def request_shutdown():
+        if not shutdown_requested.is_set():
+            shutdown_requested.set()
+
+    try:
+        try:
+            loop.add_signal_handler(signal.SIGTERM, request_shutdown)
+            loop_handler_installed = True
+        except (NotImplementedError, RuntimeError):
+            # ProactorEventLoop on Windows doesn't implement add_signal_handler.
+            try:
+                previous_handler = signal.getsignal(signal.SIGTERM)
+                signal.signal(
+                    signal.SIGTERM,
+                    lambda *_args: loop.call_soon_threadsafe(request_shutdown),
+                )
+            except (AttributeError, OSError, ValueError):
+                previous_handler = None
+
+        done, _ = await asyncio.wait(
+            (service_task, shutdown_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if shutdown_task in done:
+            sync_messenger(info="\n", type=MsgType.PLAIN)
+            sync_messenger(info="SIGTERM received, shutting down services...", type=MsgType.PRIM_SYS)
+            service_task.cancel()
+        else:
+            # Preserve failures when a service exits without a shutdown signal.
+            await service_task
+    finally:
+        for task in (service_task, shutdown_task):
+            if not task.done():
+                task.cancel()
+
+        await asyncio.gather(service_task, shutdown_task, return_exceptions=True)
+
+        if loop_handler_installed:
+            loop.remove_signal_handler(signal.SIGTERM)
+            
+        elif previous_handler is not None:
+            signal.signal(signal.SIGTERM, previous_handler)
 
 def full_start():
     check_params()
     check_data_init()
     check_warns()
-    asyncio.run(start_all(start_target))
+    asyncio.run(_start_with_sigterm(start_target))
 
 if __name__ == "__main__":
     full_start()

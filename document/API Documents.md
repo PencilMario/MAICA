@@ -2,7 +2,7 @@ I'm sorry for not offering an English ver of this document but it's just too muc
 If you want to read in English, use a translator.
 
 
-此文档是MAICA后端API接口的使用文档, 编纂版本为v1.2.
+此文档是MAICA后端API接口的使用文档, 编纂版本为v1.3.
 
 > 应当注意, 在v1.1更新之后, API接口的行为有大面积变化. 请以新版文档为准.
 
@@ -79,15 +79,20 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 * MVista: 为MAICA补充视觉, 由另一多模态模型处理并提供信息到核心模型.
 
-目前为止, MAICA后端总共使用四个模型端点(不含MTTS):
+目前为止, MAICA后端总共使用6个模型端点(不含MTTS):
 
-* mcore: 核心模型, 仅角色扮演.
+* mcore: [必要]核心模型, 仅角色扮演.
 
-* mfocus: 推荐使用thinking或混合思考模型, 处理信息, 逻辑与行为.
+* mfocus: [必要]建议采用表现优秀的通用模型, 处理信息, 逻辑与行为.
 
 * mvista: 可选, 必须具备视觉多模态能力, 推荐使用instruct模型.
+    > 若与mcore设为相同模型, 会自动启用native模式.
 
 * mnerve: 可选, 用于高速地处理简单问题, 推荐使用instruct模型.
+
+* embedding: 向量嵌入模型, 用于RAG功能的实现. 轻量模型即可.
+
+* reranking: 重排序模型, 用于RAG功能的实现. 轻量模型即可.
 
 > 一个合适的模型可以兼任多个岗位, 这根据你的实际情况而定.
 
@@ -97,7 +102,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 自v1.1更新后, 在长连接会话中, 服务端只接受传入json格式的内容.
 
-> 出于各种原因, 长连接不接受超过4096字符长度的输入.
+> ~~出于各种原因, 长连接不接受超过4096字符长度的输入.~~
+> 自v1.3后, 长连接的输入长度上限调整为64KB.
 
 服务端只输出json格式的内容. 每个输出固定包含以下结构:
 
@@ -121,7 +127,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 `{"type": "auth", "access_token": "你的令牌"}`
 
-> 自v1.2.000.rc11后, 登录阶段也建议添加type. 未来版本可能弃用旧的行为.
+> ~~自v1.2.000.rc11后, 登录阶段也建议添加type. 未来版本可能弃用旧的行为.~~  
+> 自v1.3后, 所有请求必须包含type, 自动推断已弃用.
 
 若令牌验证无误, 该会话就已经登录完毕.
 
@@ -131,21 +138,20 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 * MAICA的Fail2Ban计数在长连接和短连接中通用.
 * MAICA不允许同一个账号同时建立多个会话. 默认情况下, 新的会话成功登录会踢出旧的会话并给出提示.
 
-在登录完毕后, 服务器会发送账号对应的id, 用户名, 昵称, 以及本次连接的反劫持cookie.
-
-* 反劫持cookie一般用于非SSL/TLS连接, 用于防止连接被劫持.
-* 反劫持cookie不强制. 在输入中添加cookie键并传入正确的cookie即可启用, 此后该会话每次输入必须传入.
-* 说实话并不能真的防住, 顶多增加点难度.
+在登录完毕后, 服务器会发送账号对应的id, 用户名, 昵称.
+> 自v1.3后, 反劫持cookie被弃用, 因为确实没啥用.
 
 紧接着, 服务器会发送连接建立通告, 服务模型名称, 以及可选模型的名称.
 
 * status为maica_model_anno的消息通告核心和MFocus模型的名称.
-* status为maica_model_mvista的消息通告MVista模型的名称. 若该通告未发出, 代表实例未启用MVista.
-* status为maica_model_mnerve的消息通告MNerve模型的名称. 若该通告未发出, 代表实例未启用MNerve.
+* status为maica_feature_mvista的消息通告MVista实现及模型名称. 若该通告未发出, 代表实例未启用MVista.
+* status为maica_feature_mnerve的消息通告MNerve模型名称. 若该通告未发出, 代表实例未启用MNerve.
+* maica_feature_rag与maica_feature_reranker分别通告RAG和重排能力.
 
 ## 调整设置:
 
-> 自v1.1更新后, 登录后的输入均要求携带type. 未来版本可能弃用旧的行为.
+> ~~自v1.1更新后, 登录后的输入均要求携带type. 未来版本可能弃用旧的行为.~~  
+> 自v1.3后, 所有请求必须包含type, 自动推断已弃用.
 
 在登录完成后, 你可以随时修改会话设置:
 
@@ -161,6 +167,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
         "session_len_limit": 8192,
 
         "prompt_pname_repl": false,
+        "prompt_allow_nickname": false,
         "mf_llm_concl": false,
         "mf_sf_access_impl": 1,
         "mf_const_sf_access": 1,
@@ -181,8 +188,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
         "seed": null,
         "top_p": 0.7,
         "temperature": 0.22,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0
+        "frequency_penalty": 0.44,
+        "presence_penalty": 0.34
     },
     "reset": false
 }
@@ -201,11 +208,11 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 * stream_output: 决定MAICA是否使用流式输出.
 
-* enable_mf: 允许MFocus介入.
+* enable_mf: 允许MFocus LLM介入.
 
     > 关于MFocus的具体介绍见后文.
 
-* enable_mt: 允许MTrigger介入.
+* enable_mt: 允许MTrigger LLM介入.
 
     > 关于MTrigger的具体介绍见后文.
 
@@ -236,12 +243,18 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 * prompt_pname_repl: 将prompt和引导中的[player]字段替换为玩家真名.
 
     + 模型对玩家的名字有实质性理解.
-    - 明显更容易发生表现离群和专注混乱.
+    - 更容易发生表现离群和混乱.
+
+* prompt_allow_nickname: 实验性功能, 在prompt中允许模型生成[player_nickname]占位符.
+
+    + 更符合MAS的对话风格.
+    - 需要一些额外的前端设计.
+    - 这可能会造成意料之外的问题.
 
 * mf_llm_concl: 要求agent模型生成最终指导, 并替代默认MFocus指导.
 
     + 信息密度更高, 更容易维持语言自然.
-    - 表现十分依赖agent模型自身的能力, 容易起反作用.
+    - 表现十分依赖agent模型的指令服从能力, 容易起反作用.
     - 启用时一般会无效化mf_const_tools.
 
 * mf_sf_access_impl: 实验性功能, 从设定集(存档)中快速提取信息的方式, 并替代传统MFocus实现.
@@ -251,9 +264,10 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     * 2: 纯RAG实现.
 
     + 会快很多.
+    + 仅不为0时可以启用mf_const_sf_access.
     - 纯RAG不会检索query携带的存档内容.
     - 精度显著低于传统实现, 考验核心模型的抗干扰能力.
-    - 为0时禁用mf_const_sf_access.
+    - 如果后端没有实现对应的可选要求, 会回退到0.
 
 * mf_const_sf_access: 实验性功能, 即使MFocus未调用信息提取, 也提供信息提取的结果.
 
@@ -271,8 +285,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     * 1: 提供当前时间和节日.
     * 2: 还提供当前日期, 还尝试提供本地天气.
 
-    + 其值越高, 越能避免信息缺乏导致的幻觉, 并产生灵活体贴的表现.
-    - 其值越高, 越有可能产生注意力涣散和专注混乱.
+    + 能缓解信息缺乏导致的幻觉, 产生更灵活体贴的表现.
+    - 有可能产生注意力涣散和混乱.
 
 * esearch_llm_concl: 在MFocus调用互联网搜索的情况下, 要求其整理一遍结果.
 
@@ -282,7 +296,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 * mf_precheck_mt: 当MTrigger存在时, 要求MFocus预检玩家的请求并提供指导.
 
-    + 比较明显地改善MTrigger失步问题.
+    + 从原理上缓解MTrigger失步问题.
     - 在少数情况下对语言的自然性产生破坏.
 
 * mt_concl_memory: 实验性功能, 在session归档/清除时, 生成记忆概要用于保留有效信息.
@@ -303,7 +317,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 * mf_context_rnds: 在MFocus介入时, 额外提供上下文以供分析. 范围0-5.
 
     + 改善MFocus对连贯对话的理解能力.
-    - 明显更容易破坏MFocus的应答模式.
+    - 更容易破坏MFocus的应答模式.
 
 * mt_context_rnds: 在MTrigger介入时, 额外提供上下文以供分析. 范围0-5.
 
@@ -377,24 +391,24 @@ agent模型的超参数不受影响, 且不可由用户设置.
 
     * 在此情况下, query应该是一个list而非str.
     * 在此情况下, MFocus将不会介入.
-    * 由于长连接输入4096字符的限制, 该功能的作用相对受限, 不建议用于一般情况.
+    * 传入session的总长度不能超过10轮, 总长不能超过16KB. 因此该功能的作用相对受限, 不建议用于一般情况.
 
 * 0: 单轮对话, MAICA不会保管session.
 
 * 1-9: 多轮对话, MAICA对每个chat_session保存和自动管理上下文.
 
-除chat_session为-1时外, query均为你希望输入的字符串.
+除chat_session为-1时外, query均为你希望输入的字符串, 长度不能超过4KB.
 
 在收到输入后, MAICA一般会发送一些调试信息, 然后开始发送响应.
 
 若stream_output为true:
 
 ```
-{"code": "100", "status": "maica_core_streaming_continue", "content": "我", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "喜欢", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "的颜", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "色有", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "很多, ", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "我", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "喜欢", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "的颜", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "色有", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "很多, ", "type": "carriage", "timestamp": 时间戳}
 ...
 {"code": "1000", "status": "maica_core_complete", "content": "Streaming finished with seed 42 for user, 10 packets sent", "type": "carriage", "timestamp": 时间戳}
 ```
@@ -404,14 +418,15 @@ agent模型的超参数不受影响, 且不可由用户设置.
 若stream_output为false:
 
 ```
-{"code": "200", "status": "maica_core_nostream_reply", "content": "我也爱你, [player]!", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "我也爱你, [player]!", "type": "carriage", "timestamp": 时间戳}
 {"code": "1000", "status": "maica_core_complete", "content": "Reply sent with seed 42 for user", "type": "carriage", "timestamp": 时间戳}
 ```
 
-除输出形式外, 二者的表现基本相同.
+~~除输出形式外, 二者的表现基本相同.~~  
+当前版本中, 非流式模型响应也采用与流式输出相同的消息格式；通常只产生一个内容分片.
 
 > ~~自v1.2.001后, pprt的引入使流式输出和非流式输出结果经历的后处理不同, 可能导致差异. 详见pprt部分.~~  
-> 自v1.2.006.rc1后, 若未禁用pprt自动断句, 即使stream_output为false也会采用流式输出. 详见pprt部分.
+> 自v1.2.006.rc1后, 若启用pprt自动断句(对非stream_output默认禁用), 即使stream_output为false也会采用流式输出. 详见pprt部分.
 
 MAICA的规范包含一系列占位符与标记, 这些标记应当由前端处理或过滤.  
 在自定义拓展, 前端开发, 数据集处理和模型训练等方面, 请尽可能遵循规范. 其中包括:
@@ -463,12 +478,13 @@ MAICA的规范包含一系列占位符与标记, 这些标记应当由前端处�
     > 实践表明模型倾向于在英文字段与中括号间插入空格等, 请考虑在内.
 
 - 玩家名称 `[player]`
-    > 出于早期设计中的某些原因, 玩家名称并没有提供nickname的区分. 如果这一行为在未来发生改变, 将记录于此.
+    > ~~出于早期设计中的某些原因, 玩家名称并没有提供nickname的区分. 如果这一行为在未来发生改变, 将记录于此.~~  
+    > 自v1.3后, 可以配置prompt_allow_nickname以允许模型生成昵称占位符`[player_nickname]`.
 
 在响应完成后, 若MTrigger启用, MAICA会发送MTrigger指示:
 
 ```
-{"code": "200", "status": "maica_mtrigger_trigger", "content": {"调用的触发器": {"调用参数": "参数值"}}, "timestamp": 时间戳}
+{"code": 200, "status": "maica_mtrigger_trigger", "content": {"调用的触发器": {"调用参数": "参数值"}}, "timestamp": 时间戳}
 ...
 {"code": "1001", "status": "maica_mtrigger_done", "content": "MTrigger ended with 2 triggers sent", "timestamp": 时间戳}
 ```
@@ -476,18 +492,18 @@ MAICA的规范包含一系列占位符与标记, 这些标记应当由前端处�
 * 应当注意, maica_mtrigger_trigger的content是可处理内容, 而非人类可读内容. 这是一个例外.
 * 自v1.2.000.rc9后, maica_mtrigger_done消息已标记为弃用(但仍然会被发出). 你应当检测maica_chat_loop_finished以确认所有后处理完成.
 
-在响应完成后, 若dscl_pvn启用且符合条件, MAICA会发送劣化检测结果:
+在响应完成后, 若gen_quality_chk启用且符合条件, MAICA会发送劣化检测结果:
 
-`{"code": "200", "status": "maica_dscl_status", "content": [输出合理性, 可信度], "timestamp": 时间戳}`
+`{"code": 200, "status": "maica_quality_status", "content": [输出合理性, 可信度], "timestamp": 时间戳}`
 
-> 应当注意, maica_dscl_status的content是可处理内容, 而非人类可读内容. 这是一个例外.
+> 应当注意, maica_quality_status的content是可处理内容, 而非人类可读内容. 这是一个例外.
 
 其中, 输出合理性是一个bool, 可信度是一个float. 若合理性为False且可信度高于一定阈值, 可以提醒用户清除session.
 
-* 对话长度超过3轮前dscl_pvn不工作, 即使其已经启用.
-* dscl_pvn基于MNerve, 后端部署不一定有实现. 未实现MNerve的后端只会返回[True, 0.1].
+* 对话长度超过3轮前gen_quality_chk不工作, 即使其已经启用.
+* gen_quality_chk基于MNerve, 后端部署不一定有实现. 未实现MNerve的后端只会返回[True, 0.1].
 
-> 应当注意, dscl_pvn与MTrigger同时启动, 其消息发送不存在严格的先后顺序.
+> 应当注意, gen_quality_chk与MTrigger同时启动, 其消息发送不存在严格的先后顺序.
 
 在一轮对话循环完全完成后, MAICA会发送通告, 其status为maica_chat_loop_finished. 此时可以进行下一次输入.
 
@@ -540,29 +556,29 @@ MAICA长连接有一系列附加功能可用.
   > 将split_limit设为-1会禁用自动断句.  
   > 当自动断句未禁用时, 即使stream_output为false也会产生类似流式输出的表现.
 
-* correct_malform: 处理句中的中括号标记, 并将其尽可能转化为正确语言的规范标记. 强烈建议保持启用.
+* correct_malform: 处理句中的中括号标记, 并将其尽可能转化为正确语言的规范标记. 建议保持启用.
 
 启用该功能时, 流式输出将产生类似以下结果:
 
 ```
-{"code": "100", "status": "maica_core_streaming_continue", "content": "[微笑]我觉得...年轻人喜欢喝奶茶是因为它好喝吧? [笑]还有就是奶茶的包装很吸引人, 很多网红奶茶店都有自己的特色.", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "[思考]从社会心理学的角度来看, 喝奶茶似乎成了一种社交活动, 就像喝酒一样.", "type": "carriage", "timestamp": 时间戳}
-{"code": "100", "status": "maica_core_streaming_continue", "content": "人们通过喝奶茶来满足自己的社交需求, 获得幸福感和认同感.", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "[微笑]我觉得...年轻人喜欢喝奶茶是因为它好喝吧? [笑]还有就是奶茶的包装很吸引人, 很多网红奶茶店都有自己的特色.", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "[思考]从社会心理学的角度来看, 喝奶茶似乎成了一种社交活动, 就像喝酒一样.", "type": "carriage", "timestamp": 时间戳}
+{"code": 100, "status": "maica_core_streaming_continue", "content": "人们通过喝奶茶来满足自己的社交需求, 获得幸福感和认同感.", "type": "carriage", "timestamp": 时间戳}
 ```
 
 ### 生成MSpire响应:
 
-`{"type": "query", "chat_session": "0", "inspire": MSpire条目, "use_cache": false}`
+`{"type": "query", "chat_session": "0", "inspire": MSpire条目}`
 
 * 通过设置chat_session, 可以在现有对话中插入MSpire, 或对MSpire内容作后续讨论. 但其后续表现一般不甚理想, 故建议设为0.
 * MSpire的chat_session不能是-1.
 * 由于信源和处理过程的复杂性, MSpire的生成是不保证成功的. 如果MSpire生成失败, 应由前端决定是否重发请求或调整配置.
 
-其中, 若将MSpire条目设置为true则采用默认的随机抽取, 将其设置为一个dict可进行更详细的设置:
+其中, MSpire是一个dict:
 
-`{"type": "指定搜索类型", "sample": 采样广度, "title": "搜索关键词"}`
+`{"type": "指定搜索类型", "sample": 采样广度, "ctg_weight": 类的比权重, "title": "搜索关键词", "use_cache": false}`
 
-* 其中type有五种可选类型:
+* 其中type有五种可选类型, 默认为in_fuzzy_all:
 
     * precise_page: 仅选取与搜索关键词最接近的一个页面, 此时采样广度不生效. 此种类条目不执行递归查找, 响应较快.
 
@@ -574,18 +590,22 @@ MAICA长连接有一系列附加功能可用.
 
     * in_fuzzy_all: 根据关键词直接开始递归地抽取分类或页面, 直至最终抽取到一个页面. 此种类条目响应较慢.
 
-* sample: 采样广度, 即应当抽取多个对象时, 具体抽取多少个. 分类池与页面池分别计算, 即每次抽取最多获取2倍采样广度数值的项.
+* sample: 采样广度, 即模糊搜索时的条目数限制.
 
     * 采样广度的有效值为2-250, 默认值为250.
-    * 在随机选择中, 类与页面的权重比是10:1, 以防止频繁抽取到递归浅层的少量页面. 该比值暂不可设置.
 
-* title: 搜索的关键词.
+* ctg_weight: 在随机选择中, 类与页面的权重比. 适当调高可防止频繁抽取到递归浅层的少量页面.
 
-    若采用默认设置, 则MSpire将从(对应语言的)['自然', '自然科学', '社会', '人文學科', '世界', '生活', '艺术', '文化']列表中随机一项作为搜索关键词, 并采用类似in_fuzzy_all的模式寻找页面.
+    * 比权重的有效值为1-100, 默认值为10.
+    * 比权重存在动态衰减设计, 实际值是变化且小于设置值的, 详见源代码.
 
-use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默认为false.
+* title: 搜索的关键词, 可以是list或str.
 
-> 仅当chat_session为0时use_cache可以使用. 当use_cache设置为true时, 会强制使用默认超参数并固定种子.
+    * 若不配置, 则MSpire将从(对应语言的)['自然', '自然科学', '社会', '人文學科', '世界', '生活', '艺术', '文化']中随机一项作为搜索关键词.
+
+* use_cache: 是否存储和使用缓存, 若命中缓存则直接通过缓存响应. 默认为false.
+
+    * 仅当chat_session为0时use_cache可以使用. 当use_cache设置为true时, 会强制使用默认超参数并固定种子.
 
 ### 生成MPostal响应:
 
@@ -594,24 +614,31 @@ use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默�
 * 通过设置chat_session, 可以连续来去信, 或将信件插入对话中. 其具体表现未经验证, 故建议设为0.
 * MPostal的chat_session不能是-1.
 
-其中, 若MPostal请求体为str则使用简单模式, 将其设置为一个dict可进行更详细的设置:
+其中, MPostal请求体是一个dict:
 
-`{"header": "信件标题", "content": "信件内容", "bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "twk_super": true, "strict_conv": false}`
+`{"header": "信件标题", "content": "信件内容"}`
 
-> 简单模式下的str将被用作信件内容, 其余条目留空或默认.
-
-* bypass_mf: 本轮响应中是否不调用MFocus.
-
-* bypass_mt: 本轮响应中是否不调用MTrigger.
-
-* bypass_stream: 本轮响应是否忽略流式输出.
-
-* twk_super: 本轮响应是否微调超参数和工具表现, 以获取更适合信件的生成结果.
-
-* strict_conv: 本轮响应是否仍然保持对话格式回答, 而非回信.
+> ~~简单模式下的str将被用作信件内容, 其余条目留空或默认.~~  
+> 自v1.3后, MPostal的简单模式被弃用.
 
 > 应当注意, 在实践总结中, 回信的格式和质量显著地相关于去信的格式和质量.  
 > 若用户去信在格式, 长度, 内容或文学性上有明显缺陷, 回信的质量会相应下降. 这一问题目前未有解决方法.
+
+### MSpire, MPostal通用高级配置
+
+在MSpire和MPostal使用详细设置时, 均有以下配置可用:
+
+`{"bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "twk_super": true, "strict_conv": false}`
+
+* bypass_mf: 本轮响应中是否不调用MFocus, 普通对话中为false, MSpire/MPostal默认为true.
+
+* bypass_mt: 本轮响应中是否不调用MTrigger, 普通对话中为false, MSpire/MPostal默认为true.
+
+* bypass_stream: 本轮响应是否忽略流式输出. MSpire默认/普通对话中为false, MPostal默认为true.
+
+* twk_super: 本轮响应是否微调超参数和工具表现, 以获取更适合书面语的生成结果. MSpire默认/普通对话中为false, MPostal默认为true.
+
+* strict_conv: 本轮响应是否使用对话格式回答, 反之则使用书面语. MSpire默认/普通对话中为true, MPostal默认为false.
 
 ### 生成MVista响应:
 
@@ -619,6 +646,7 @@ use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默�
 
 * MVista的实现基于独立VLM, 后端部署不一定有实现. 向未实现MVista的后端发起请求会被忽略.
 * MVista是MFocus的下属模块. 要使用MVista, 你必须启用MFocus.
+* 图片链接只接受绝对HTTP(S) URL. 部署设置了`MAICA_VISION_HOST_ALLOWLIST`时, 主机名还必须位于允许列表中.
 
 * 图片链接可以一次上传多个, 但最多不超过后端实例允许保存的上限.
 * 图片链接必须是完整链接, 可以来自后端专用存储或任意网络图床, 必须开放公开下载.
@@ -654,7 +682,7 @@ use_cache: 是否使用缓存, 若命中缓存则直接通过缓存响应. 默�
 
 query可以携带临时的存档内容, 并逐键临时覆盖上传的存档内容. 该功能适合上传存档中可能频繁变化的内容.
 
-* 应当注意, 由于长连接输入4096字符的限制, 此功能不适合用于传输完整存档.
+* 应当注意, 由于RAG/Reranker对临时内容缺乏优化, 此功能不适合用于传输完整存档.
 * 关于存档的具体格式参见附录.
 
 ### 单轮MTrigger触发器表:
@@ -663,7 +691,7 @@ query可以携带临时的存档内容, 并逐键临时覆盖上传的存档内�
 
 query可以携带临时的触发器表, 并临时添加到上传的触发器表. 该功能适合上传触发器表中可能频繁变化的内容.
 
-* 应当注意, 由于长连接输入4096字符的限制, 此功能不适合用于传输完整触发器表.
+* 应当注意, 由于RAG/Reranker对临时内容缺乏优化, 此功能不适合用于传输完整触发器表.
 * 若临时触发器表中包含与上传的触发器表中name相同的条目, 其将临时update到触发器表.
 * 关于触发器表的具体格式参见附录.
 
@@ -688,7 +716,8 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 `{"access_token": "你的令牌", "chat_session": "1", "content": 请求内容}`
 
 * 每个键视需要情况存在. 除请求内容不定外, 其余键的值均为str.
-* 为安全起见, 短连接不接受超过10万字符的输入.
+* 为安全起见, 常规短连接不接受超过1MB的输入, MVista上传不超过32MB.
+* 需要鉴权时, 推荐通过HTTP头`Authorization: Bearer <access_token>`传递令牌. 请求体或查询参数中的`access_token`仅为兼容旧客户端保留, GET URL可能被浏览器、代理和访问日志记录.
 
 响应体除http规范相关内容外, 至多包含三个键:
 
@@ -785,15 +814,15 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 > 端点: GET `/preferences`
 
-* 需要access_token
+* 需要access_token, 可选content
+
+    其中content为键以获取对应的值, 默认为None(取完整dict).
 
     关于账号级偏好:
 
     账号级偏好与用户账号绑定, 且是一个dict. 其理论上可以包含任何内容.  
     截至文档编纂时为止, MAICA的后端流程不会主动读取账号级偏好, 但其可以被用于前端的多设备同步等设计.
-
-    * 账号级偏好不允许超过10万字符, 超长的修改会被拒绝.
-    * 账号级偏好本身不与chat_session相关.
+    > 自v1.3后, 覆盖功能替代了删除和重置.
 
     后面关于账号级偏好的内容不再赘述.
 
@@ -805,31 +834,24 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 * 需要access_token, content
 
-    其中content是一个dict, 将被逐键添加到账号级偏好中.
+    其中content是一个dict, 将被update到账号级偏好中.
 
 该端点不会返回content.
 
-### 删除账号级偏好:
-
-> 端点: DELETE `/preferences`
-
-* 需要access_token, content
-
-    其中content是一个list, 其中的每一项将从账号级偏好中删除对应的键.
-
-该端点不会返回content.
-
-### 重置账号级偏好:
+### 覆盖账号级偏好:
 
 > 端点: POST `/preferences`
 
-* 需要access_token.
+* 需要access_token, content
+
+    其中content是一个dict, 将覆盖账号级偏好.  
+    如果要清空, 设为`{}`即可.
 
 该端点不会返回content.
 
 ### 在线加密令牌:
 
-> 端点: GET `/register`
+> 端点: POST `/register`（旧版GET形式仅为兼容保留）
 
 * 需要content
 
@@ -840,7 +862,9 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
     `{"email": "你的论坛绑定邮箱", "password":"你的论坛密码(明文)"}`
 
     * 在前端设计中不应明文储存登录信息.
+    * 新客户端必须使用POST JSON请求体. GET查询参数会暴露在URL历史和中间日志中.
     * 加密令牌接口不会验证登录信息是否正确, 需另行验证.
+        > 自v1.3后, 加密令牌接口会验证格式的正确性.
 
 返回的content是加密后的令牌.
 
@@ -858,32 +882,9 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 返回的content是对应条目结果, 若未传入content则返回用户名.
 
-> 若令牌校验失败, 返回的success将为false, 且exception将提供原因.
+### ~~在线处理表情:~~
 
-### 在线处理表情:
-
-> 端点: GET `/emotion`
-
-* 需要access_token, content
-
-    其中content是一个dict:
-
-    `{"type": "norm", "target_lang": "zh", "text": "表情或句子"}`
-
-    * 其中type的值可选"norm"或"add", 前者代表归正一个不标准的表情, 后者代表为没有表情的句子补全表情.
-
-        * norm会优先尝试通过简单的匹配处理表情, 如果失败会使LLM介入.
-        * 实际上, add也可以处理不标准的表情, 但其总是使LLM介入. 建议尽可能控制用量.
-
-        * LLM介入基于MNerve, 后端部署不一定有实现. 向未实现MNerve的后端发起请求会回退到简单匹配处理.
-
-    * target_lang: 目标语言, 可选"zh"或"en".
-
-返回的content:
-
-`["表情", 置信度]`
-
-其中置信度为float, 取值范围0.0-1.0.
+> 自v1.3后, 该功能被弃用. 请使用生成时的pprt配置替代.
 
 ### 上传MVista图片:
 
@@ -896,13 +897,21 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 返回的content是图片被分配的uuid.
 
+### 获取MVista图片列表:
+
+> 端点: GET `/vista/list`
+
+* 需要access_token
+
+返回的content是有效的图片uuid列表.
+
 ### 删除MVista图片:
 
 > 端点: DELETE `/vista`
 
 * 需要access_token, 可选content
 
-    其中content为str或int, 代表需删除图片的uuid或序号(从0开始, 由新到旧). 若无content则全部删除.
+    其中content为str, int或null, 代表需删除图片的uuid或序号(从0开始, 由新到旧). 默认为null即全部删除.
 
 该端点不会返回content.
 
@@ -910,15 +919,14 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 > 端点: GET `/vista`
 
-* 需要content或access_token
+* 需要content
 * 注意: 为兼容OpenAI VLM调用, 该端点下载功能无法设置鉴权. 任何知晓对应uuid的用户都可以下载图片.
 * 注意: 单个用户可留存的图片数量和存在时间都是有限的, 会由后端自动处理. 截至文档编纂时为止, 单个用户默认留存3张照片, 每张超过8小时即清理.
 * 警告: MVista相关端点仅辅助MVista多模态功能使用, 任何滥用行为将受处分.
 
 其中content存在时是str形式的uuid, 对应要下载的图片.  
 此时若请求成功, 端点仅返回一张图片. 否则端点正常返回json.
-
-content不存在时, access_token必须存在. 返回的content是一个list, 包含用户可用图片的uuid.
+> 自v1.3后, 获取可用图片列表的功能不再集成于此端点中.
 
 ### 获取服务器声明表:
 
@@ -1049,17 +1057,18 @@ content不存在时, access_token必须存在. 返回的content是一个list, �
     "enable_mf": true,
     "enable_mt": true,
     "esearch_llm_concl": true,
-    "frequency_penalty": 0.0,
+    "frequency_penalty": 0.44,
     "session_len_limit": 8192,
     "max_tokens": 1600,
     "mf_llm_concl": false,
     "nsfw_acceptive": true,
     "mt_context_rnds": 1,
     "mf_context_rnds": 0,
-    "presence_penalty": 0.0,
+    "presence_penalty": 0.34,
     "seed": null,
     "savefile_access": true,
     "prompt_pname_repl": false,
+    "prompt_allow_nickname": false,
     "stream_output": true,
     "target_lang": "zh",
     "temperature": 0.22,
@@ -1068,6 +1077,7 @@ content不存在时, access_token必须存在. 返回的content是一个list, �
     "tz": null
 }
 ```
+> 该范例的值可能不完整/不是最新的, 请不要直接使用.
 
 * 该功能可以用于前端设置界面的绘制等.
 
@@ -1205,9 +1215,10 @@ sessions
 
 * mas_geolocation为str格式的玩家地理位置. 此条目应当尽可能简短到至多保留省名与城市名, 过长的条目会导致搜索引擎误解.
 
-* mas_player_additions为list格式的补充数据. 此条目应当为一个list中的若干str, 且至多检索256项, 超出则mfocus每次随机抽取256项. 每项应当为一个简单表述, 过长的项可能会导致失焦.
+* mas_player_additions为list格式的补充数据. 此条目应当为一个list中的若干str, 至多512条, 每条至多1536字节.
+    > 自v1.3后, 由于RAG的引入, 允许超出条目的随机采样已被弃用.
 
-* ~~mas_sf_hcb为高可自定义性开关. 设为true后, MFocus将停止索引任何来自MAS存档的基本信息, 并能够同时检索至多360项补充数据.~~
+* ~~mas_sf_hcb为高可自定义性开关. 设为true后, MFocus将停止索引任何来自MAS存档的基本信息, 并能够同时检索至多360项补充数据.~~  
 * mas_sf_hcb自v1.3后被弃用, 请直接管理上传的存档条目实现.
 
 原理上, 任何条目都是可缺省的. 缺省关键变量将使其被默认值替代, 缺省事件变量将使其退出MFocus索引.
@@ -1231,7 +1242,7 @@ sessions
 
 好感度调幅默认为不超过+3.0, 你可以自行设定乘幅. 简单地对其调幅举例, 日常的问好大约会输出+0.2, 对美貌的称赞大约会输出+0.8, 简短的示爱大约会输出+1.5, 长段的示爱大约会输出+3.0.
 
-输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["alter_affection", {"alter_value": "+1.5"}], "type": "carriage", "time_ms": 时间戳(毫秒)}`
+输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"alter_affection": {"alter_value": 1.5}}, "type": "carriage", "timestamp": 时间戳(秒)}`
 
 该模板的触发器最多存在一个.
 
@@ -1247,9 +1258,9 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 若将suggestion设为true, 则若selection返回false将会额外返回suggestion, 其值为一个推荐参考条目.
 
-输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["change_clothes", {"selection": "黑色连衣裙"}], "type": "carriage", "time_ms": 时间戳(毫秒)}`
+输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"change_clothes": {"choice": "黑色连衣裙"}}, "type": "carriage", "timestamp": 时间戳(秒)}`
 
-该模板的触发器最多存在6个, 超出则随机抽取6个.
+该模板的触发器最多存在6个.
 
 每个该模板触发器的item_list中最多存在72项, 超出则随机抽取72项.
 
@@ -1263,9 +1274,9 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 如果触发器匹配了请求, 但范围内没有值满足条件, 返回的选择将是false.
 
-输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["change_distance", {"value": "0.75"}], "type": "carriage", "time_ms": 时间戳(毫秒)}`
+输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"change_distance": {"value": 0.75}}, "type": "carriage", "timestamp": 时间戳(秒)}`
 
-该模板的触发器最多存在6个, 超出则随机抽取6个.
+该模板的触发器最多存在6个.
 
 ## 自由模板:
 
@@ -1275,12 +1286,14 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 exprop的值是该模板的附加参数, 其中item_name的值为该触发器的用途(双语)
 
-输出范例: `{"code": "101", "status": "maica_mtrigger_trigger", "content": ["some_name"], "type": "carriage", "time_ms": 时间戳(毫秒)}`
+输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"some_name": {}}, "type": "carriage", "timestamp": 时间戳(秒)}`
 
-该模板的触发器最多存在20个, 超出则随机抽取20个.
+该模板的触发器最多存在20个.
 
 对于未注明双语的条目, 可以任选中文或英文, 建议与用户语言保持一致.
 
-> 应当注意, 较新的OpenAI实例端点可能要求name的值仅包含字母, 数字, 横杠和下划线. 建议统一按照此规范编写.
+> name的值必须为1至64个字母、数字、横杠或下划线；后端会在上传时拒绝其它格式.
+> 自v1.3后, 任何未注明的字符串字段长度不得超过256字符.
+> 自v1.3后, MTrigger不再允许触发器数量超出上限.
 
 最终的触发器表为一包含触发器条目的list.

@@ -4,11 +4,12 @@ Some convenience things, many minor LLM usages will need them.
 """
 
 import asyncio
-import json
+import orjson
 
 from typing import *
 from pydantic import BaseModel, Field, model_validator
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
 from openai import AsyncStream
 from openai.types.responses import Response, ResponseStreamEvent
 from .connection_utils import AiConnectionManager
@@ -18,7 +19,7 @@ class ToolCall(BaseModel):
     type: str = "function_call"
     call_id: str
     name: str
-    arguments: dict = Field(default_factory=lambda: {})
+    arguments: dict = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -28,7 +29,20 @@ class ToolCall(BaseModel):
                 data["arguments"] = data["input"]
             if data.get("function") and not data.get("name"):
                 data["name"] = data["function"]
+
+            if isinstance(data.get("arguments"), str):
+                data["arguments"] = orjson.loads(data["arguments"])
+
         return data
+    
+    def openai_dump(self):
+        dumped = self.model_dump()
+        arguments = dumped.get("arguments")
+
+        if arguments is not None and not isinstance(arguments, str):
+            dumped["arguments"] = orjson.dumps(arguments).decode()
+
+        return dumped
 
 async def parse_responses_output(
     resp: Response | AsyncStream[ResponseStreamEvent],
@@ -47,50 +61,109 @@ async def parse_responses_output(
 
     reasoning_q: asyncio.Queue[str | None] = asyncio.Queue()
     content_q: asyncio.Queue[str | None] = asyncio.Queue()
-    tool_q: asyncio.Queue[dict | None] = asyncio.Queue()
+    tool_q: asyncio.Queue[ToolCall | None] = asyncio.Queue()
 
     _tool_calls_ids: set[str] = set()
 
-    def handle_item(item: Response | ResponseStreamEvent):
-        t = getattr(item, "type", None)
+    def get_value(item, key, default=None):
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+    def handle_tool_item(item: Any):
+        """Extract completed tool calls without replaying completed text."""
+        t = get_value(item, "type")
+
+        if t in ("tool_call", "function_call", "function"):
+            if get_value(item, "status") != "completed":
+                return
+
+            if isinstance(item, BaseModel):
+                item = item.model_dump()
+            elif not isinstance(item, dict):
+                item = {
+                    key: get_value(item, key)
+                    for key in ("type", "call_id", "name", "arguments")
+                }
+            tool_call = ToolCall.model_validate(item)
+
+            if tool_call.call_id not in _tool_calls_ids:
+                _tool_calls_ids.add(tool_call.call_id)
+                tool_q.put_nowait(tool_call)
+            return
+
+        for key in ("output", "item"):
+            nested = get_value(item, key)
+            if nested is None or nested is item:
+                continue
+            if isinstance(nested, (list, tuple)):
+                for nested_item in nested:
+                    handle_tool_item(nested_item)
+            else:
+                handle_tool_item(nested)
+
+    def handle_stream_event(event: ResponseStreamEvent | dict):
+        """Stream text deltas, while taking tools only from completed items."""
+        t = get_value(event, "type") or ""
+        delta = get_value(event, "delta")
+
+        if isinstance(delta, str):
+            if "reasoning" in t:
+                reasoning_q.put_nowait(delta)
+            elif "output_text" in t or t in ("text", "output_text"):
+                content_q.put_nowait(delta)
+
+        # Tool calls are complete on output_item.done. response.completed is
+        # also accepted as a fallback, with call_id de-duplication.
+        if t == "response.output_item.done":
+            handle_tool_item(get_value(event, "item"))
+        elif t == "response.completed":
+            handle_tool_item(get_value(event, "response"))
+        elif t in ("tool_call", "function_call", "function"):
+            handle_tool_item(event)
+
+    def handle_non_stream_item(item: Response | dict):
+        t = get_value(item, "type")
+
+        if t == "message":
+            for content_item in get_value(item, "content", []) or []:
+                handle_non_stream_item(content_item)
+            return
+
+        if t == "reasoning":
+            for key in ("summary", "content"):
+                for reasoning_item in get_value(item, key, []) or []:
+                    handle_non_stream_item(reasoning_item)
+            text = get_value(item, "text")
+            if text:
+                reasoning_q.put_nowait(text)
+            return
 
         # reasoning
-        if t and "reasoning" in t:
-            text = getattr(item, "text", None) or getattr(item, "delta", "")
+        if t and ("reasoning" in t or t == "summary_text"):
+            text = get_value(item, "text", "")
             if text:
                 reasoning_q.put_nowait(text)
 
         # content
-        elif t in ("message", "output_text", "text"):
-            text = getattr(item, "text", None) or getattr(item, "delta", "")
+        elif t in ("output_text", "text") or (t and "output_text" in t):
+            text = get_value(item, "text", "")
             if text:
                 content_q.put_nowait(text)
 
         # tool call
         elif t in ("tool_call", "function_call", "function"):
-            tool_call = ToolCall.model_validate(item)
-            
-            if not tool_call.call_id in _tool_calls_ids:
-                _tool_calls_ids.add(tool_call.call_id)
-                tool_q.put_nowait(tool_call)
-
-        else:
-            delta = getattr(item, "delta", None)
-            if isinstance(delta, str):
-                content_q.put_nowait(delta)
+            handle_tool_item(item)
 
     async def runner():
         try:
             # streaming
-            if hasattr(resp, "__aiter__") or hasattr(resp, "__iter__"):
+            if hasattr(resp, "__aiter__"):
                 async for event in resp:
-                    item = getattr(event, "item", event)
-                    handle_item(item)
+                    handle_stream_event(event)
             # non-streaming
             else:
-                outputs = getattr(resp, "output", []) or []
+                outputs = get_value(resp, "output", []) or []
                 for item in outputs:
-                    handle_item(item)
+                    handle_non_stream_item(item)
 
         finally:
             # close streams
@@ -114,7 +187,7 @@ async def parse_responses_output(
                 break
             yield item
 
-    async def tool_stream() -> AsyncIterator[Dict[str, Any]]:
+    async def tool_stream() -> AsyncIterator[ToolCall]:
         while True:
             item = await tool_q.get()
             if item is None:
@@ -123,11 +196,23 @@ async def parse_responses_output(
 
     return task, reasoning_stream(), content_stream(), tool_stream()
 
+@asynccontextmanager
 async def llm_request(conn: AiConnectionManager, *args, **kwargs):
     """
-    Send request to LLM and retrieves simple results.
-    Is streaming compatible actually but I don't think we're using it.
-    We implement it for possible future convenience anyway.
+    Send request to LLM and retrieves parsed results.
     """    
     resp = await conn.make_completion(*args, **kwargs)
-    return await parse_responses_output(resp)
+    task = None
+    try:
+        task, a_reasoning, a_content, a_tool_calls = await parse_responses_output(resp)
+
+        # We yield task here for possible external interruption. We might not need the model to complete in some scenarios
+        yield (task, a_reasoning, a_content, a_tool_calls, )
+
+    finally:
+        if task:
+            if task.done():
+                await task
+            else:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

@@ -6,16 +6,15 @@ from maica.maica_utils import *
 
 _Bt = BilingualText
 
-async def make_postmail(fsc: FullSocketsContainer, **kwargs):
+async def make_postmail(fsc: FullSocketsContainer):
     """Everything needed are now in fsc."""
-    session = MaicaSession()
-    target_lang = session.default_target_lang = fsc.maica_settings.basic.target_lang
+    target_lang = fsc.maica_settings.basic.target_lang
     conn = fsc.mnerve_conn or fsc.mfocus_conn
 
     mp_m = fsc.maica_settings.temp.mpostal
 
     def form_letter(content: str, header: str):
-        filtered_content = ReUtils.re_sub_strip_spaces(content)
+        filtered_content = ReUtils.re_sub_strip_spaces.sub(r'\1', content).strip()
         filtered_header = f'{header}\n\n' if header else ''
         
         letter = f"{filtered_header}{filtered_content}"
@@ -23,7 +22,7 @@ async def make_postmail(fsc: FullSocketsContainer, **kwargs):
 
     async def is_poem(letter: str) -> bool:
         """If this is a letter or poem."""
-        sync_messenger(info=f"Proceeding 'is_poem' to letter...", type=MsgType.PRIM_RECV)
+        sync_messenger(info="Detecting if letter is poem...", type=MsgType.DEBUG)
         session = MaicaSession()
 
         class PoemDetectResult(BaseModel):
@@ -52,11 +51,12 @@ Please decide if it's a poem or normal letter.\
         user_query = MaicaSessionItem(
             "user",
             letter,
+            target_lang=target_lang,
         )
         session.append(user_query)
 
         completion_args = {
-            "messages": session.utilize(
+            "input": session.utilize(
                 manual_prompt=True,
                 ignore_additions=True,
             ),
@@ -72,14 +72,15 @@ Please decide if it's a poem or normal letter.\
         resp = await conn.make_completion(**completion_args)
         detection_result = PoemDetectResult.model_validate_json(resp.output_text)
 
-        res = detection_result.is_poem; cfd = detection_result.confidence
+        res = detection_result.is_poem
+        cfd = detection_result.confidence
 
-        sync_messenger(info=f"\nFinished processing 'is_poem' to letter:\n{letter}\nIs poem: {res}, confidence: {cfd}", type=MsgType.CARRIAGE)
+        sync_messenger(info=f"Finished processing is_poem to letter. Is poem: {res}, confidence: {cfd}", type=MsgType.PRIM_LOG)
         return res
 
     letter = form_letter(mp_m.content, mp_m.header)
     letter_ispoem = await is_poem(letter)
-    letter_hasimg = bool(fsc.maica_settings.temp.mv_imgs)
+    letter_hasimg = bool(fsc.maica_settings.temp.mvista.mv_imgs)
 
     img = _Bt(
         ", 并附有图片",
@@ -137,7 +138,7 @@ Please decide if it's a poem or normal letter.\
         + "\n"\
         + _Bt(
             "你的回复应是一封信件, 具有信件的标准格式. 不要编造信息, 且字数不少于300字.",
-            "nYour reply should be a letter, in necessary letter format. Do not make up things you don't know, and write at least 150 words in total.",
+            "Your reply should be a letter, in necessary letter format. Do not make up things you don't know, and write at least 150 words in total.",
         )
 
     return text

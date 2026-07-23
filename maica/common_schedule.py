@@ -1,15 +1,16 @@
 import asyncio
 import datetime
 import os
+import sqlalchemy
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from typing import *
-from maica.mtools import ProcessingImg
+from maica.mtools import ImgByUuid
 from maica.maica_utils import *
 
-_CONNS_LIST = ['maica_pool']
+_CONNS_LIST = []
 
 class CommonScheduler():
     """Keeps a schedule running."""
@@ -18,10 +19,6 @@ class CommonScheduler():
     """Don't forget to fill at first!"""
 
     def __init__(self, involve_chat=True, involve_tts=True):
-        rsc = RealtimeSocketsContainer()
-        csc = self.__class__.root_csc.spawn_sub(rsc)
-        self.fsc = FullSocketsContainer(rsc, csc)
-        self.maica_pool = self.fsc.maica_pool
 
         self.schedule = AsyncIOScheduler()
         if involve_chat:
@@ -55,8 +52,17 @@ class CommonScheduler():
         if keep_time:
             timestamp = datetime.datetime.now()
             earliest_timestamp = timestamp - datetime.timedelta(hours=keep_time)
-            sql_expression_1 = "DELETE FROM ms_cache WHERE timestamp < %s"
-            rows = (await self.maica_pool.query_modify(expression=sql_expression_1, values=(earliest_timestamp, )))[0]
+
+            async with DatabaseUtils.SessionData() as dbs:
+
+                stmt = sqlalchemy.delete(SqlMsCache).where(
+                    SqlMsCache.timestamp < earliest_timestamp
+                )
+
+                er = await dbs.execute(stmt)
+                await dbs.commit()
+                rows = er.rowcount
+
             sync_messenger(info=f'Removed {rows} rows of MSpire cache', type=MsgType.LOG)
 
     @Decos.log_task
@@ -67,19 +73,28 @@ class CommonScheduler():
             timestamp = datetime.datetime.now()
             earliest_timestamp = timestamp - datetime.timedelta(hours=keep_time)
 
-            sql_expression_1 = "SELECT uuid FROM mv_meta WHERE timestamp < %s"
-            result = await self.maica_pool.query_get(expression=sql_expression_1, values=(earliest_timestamp, ), fetchall=True)
-            uuids = [i[0] for i in result]
-            for uuid in uuids:
+            async with DatabaseUtils.SessionData() as dbs:
 
-                processing_img = ProcessingImg()
-                processing_img.uuid = uuid
-                processing_img.delete()
+                stmt = sqlalchemy.select(SqlMvMeta).where(
+                    SqlMvMeta.timestamp < earliest_timestamp
+                )
 
-                sql_expression_2 = "DELETE FROM mv_meta WHERE uuid = %s"
-                await self.maica_pool.query_modify(expression=sql_expression_2, values=(uuid, ))
+                metas = (await dbs.scalars(stmt)).all()
+                
+                for meta in metas:
+                    try:
+                        processing_img = ImgByUuid()
+                        processing_img.uuid = meta.uuid
+                        await asyncio.to_thread(processing_img.delete)
+                    except Exception:
+                        # We ignore file <= db inconsistency, because they're temporary anyway
+                        pass
 
-            sync_messenger(info=f'Removed {len(uuids)} MVista images', type=MsgType.LOG)
+                    await dbs.delete(meta)
+
+                await dbs.commit()
+
+            sync_messenger(info=f'Removed {len(metas)} MVista images', type=MsgType.LOG)
 
     @Decos.log_task
     async def gc_sessions(self):
@@ -92,21 +107,24 @@ class CommonScheduler():
 
             gced = dbos_gc(ftime)
             sync_messenger(info=f'Destroyed {len(gced)} session handlers', type=MsgType.LOG)
+            gced2 = buffers_gc(ftime)
+            sync_messenger(info=f'Destroyed {len(gced2)} websocket buffers', type=MsgType.LOG)
 
     @Decos.log_task
     async def rotate_mtts_cache(self):
         """Deletes long-unused mtts cache."""
         def sync_rotation(earliest_timestamp):
             base_path = get_inner_path('fs_storage/mtts')
-            mtts_cache_entries = os.scandir(base_path)
-            delete_list = []; all_count = 0
-            for entry in mtts_cache_entries:
-                if entry.is_file() and not entry.name.startswith('.'):
-                    all_count += 1
-                    path = entry.path
-                    last_atime = os.path.getatime(path)
-                    if last_atime < earliest_timestamp:
-                        delete_list.append(path)
+            delete_list = []
+            all_count = 0
+            with os.scandir(base_path) as mtts_cache_entries:
+                for entry in mtts_cache_entries:
+                    if entry.is_file() and not entry.name.startswith('.'):
+                        all_count += 1
+                        path = entry.path
+                        last_atime = os.path.getatime(path)
+                        if last_atime < earliest_timestamp:
+                            delete_list.append(path)
             
             for path in delete_list:
                 try:
@@ -119,7 +137,7 @@ class CommonScheduler():
         if keep_time:
             timestamp = datetime.datetime.now()
             earliest_timestamp_float = (timestamp - datetime.timedelta(hours=keep_time)).timestamp()
-            deleted_count, all_count = await wrap_run_in_exc(None, sync_rotation, earliest_timestamp_float)
+            deleted_count, all_count = await asyncio.to_thread(sync_rotation, earliest_timestamp_float)
 
             sync_messenger(info=f'Removed {deleted_count} MTTS caches, {all_count} remaining', type=MsgType.LOG)
 
@@ -128,7 +146,8 @@ class CommonScheduler():
         await sleep_forever()
 
     async def close(self):
-        self.schedule.shutdown()
+        if self.schedule.running:
+            self.schedule.shutdown(wait=False)
 
 async def prepare_thread(**kwargs):
 
@@ -136,20 +155,26 @@ async def prepare_thread(**kwargs):
     root_csc_kwargs = {k: kwargs.get(k) for k in _CONNS_LIST}
     root_csc = ConnSocketsContainer(**root_csc_kwargs)
     CommonScheduler.root_csc = root_csc
-
-    await messenger(info='MAICA scheduler started!', type=MsgType.PRIM_SYS)
     
+    common_scheduler = None
     try:
         common_scheduler = CommonScheduler(kwargs.get('involve_chat', True), kwargs.get('involve_tts', True))
-        await common_scheduler.run_schedule()
-        common_scheduler.close()
 
-    except BaseException as be:
-        if isinstance(be, Exception):
-            error = CommonMaicaError(str(be), '504')
-            await messenger(error=error, no_raise=True)
+        sync_messenger(info='MAICA scheduler started!', type=MsgType.PRIM_SYS)
+
+        await common_scheduler.run_schedule()
+
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        error = CommonMaicaError(str(e), '504')
+        sync_messenger(error=error)
+        raise
+
     finally:
-        await messenger(info='MAICA scheduler stopped!', type=MsgType.PRIM_SYS)
+        if common_scheduler:
+            await common_scheduler.close()
+        sync_messenger(info='MAICA scheduler stopped!', type=MsgType.PRIM_SYS)
 
 async def _run_shd():
     """
@@ -169,7 +194,7 @@ async def _run_shd():
     for conn in root_csc_items:
         close_list.append(conn.close())
     await asyncio.gather(*close_list)
-    await messenger(info='Individual MAICA scheduler cleaning done', type=MsgType.DEBUG)
+    sync_messenger(info='Individual MAICA scheduler cleaning done', type=MsgType.DEBUG)
 
 def run_shd():
     asyncio.run(_run_shd())

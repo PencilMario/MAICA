@@ -2,14 +2,14 @@
 import asyncio
 
 from abc import ABC, abstractmethod
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from types import *
 from typing import *
 from dataclasses import dataclass, field
 from .maica_utils import *
 
-_JSCType = Literal["string", "number", "integer", "object", "array", "boolean", "null"]
-JSCType = List[_JSCType] | _JSCType
+type _JSCType = Literal["string", "number", "integer", "object", "array", "boolean", "null"]
+type JSCType = List[_JSCType] | _JSCType
 
 _Bt = BilingualText
 
@@ -40,7 +40,7 @@ class WrappedOpenAIToolProperty():
         }
         for k in ("properties", "items", "enum", "minimum", "maximum", "minLength", "maxLength"):
             v = getattr(self, k, None)
-            if v:
+            if v is not None:
                 inner[k] = v
         return {self.name: inner}
 
@@ -59,7 +59,9 @@ class WrappedOpenAITool():
                 setattr(self, k, [])
 
     def to_json_schema(self, target_lang: Literal['zh', 'en', 'auto']='zh'):
-        l1 = {i.name: i.to_json_schema(target_lang) for i in self.requiredParams + self.optionalParams}
+        l1 = {}
+        for prop in self.requiredParams + self.optionalParams:
+            l1.update(prop.to_json_schema(target_lang))
         l2 = {
             "type": "object",
             "properties": l1,
@@ -93,12 +95,17 @@ class WrappedOpenAIToolNamespace():
 
 class _BaseTriggerExprop(BaseModel):
     """Extra props of MTrigger items."""
-    type: Literal["switch", "meter", "boolean"]
     item_name: BilingualText
+
+    @model_validator(mode="after")
+    def limit_item_name(self):
+        if any(len(value) > 256 for value in (self.item_name.zh, self.item_name.en, self.item_name.auto)):
+            raise ValueError("Trigger item names cannot exceed 256 characters")
+        return self
             
 class _SwitchTriggerExprop(_BaseTriggerExprop):
-    _template: ClassVar[str] = "common_switch_template"
-    item_list: list[str]
+    # We still adopt the sampling here because managing them frontend would be tough
+    item_list: list[Annotated[str, Field(min_length=1, max_length=256)]]
     curr_item: Optional[str] = None
     suggestion: bool = False
 
@@ -111,7 +118,7 @@ class _SwitchTriggerExprop(_BaseTriggerExprop):
                     f"根据用户的要求, 从以下{self.item_name.zh}中选出最合适的一项. 如果没有任何一项合适, 则回答null.",
                     f"According to user's request, choose the most proper {self.item_name.en} from the following list. Output null if none of them is proper."
                 ),
-                enum=self.item_list + [None],
+                enum=limit_length(self.item_list, 72) + [None],
             )
         ]
         if self.suggestion:
@@ -120,7 +127,7 @@ class _SwitchTriggerExprop(_BaseTriggerExprop):
                     "suggestion",
                     ["string", "null"],
                     _Bt(
-                        f"若你在choice中选择了null, 你需要回答最合适, 但上面未列出的{self.item_name.zh}. 否则回答null."
+                        f"若你在choice中选择了null, 你需要回答最合适, 但上面未列出的{self.item_name.zh}. 否则回答null.",
                         f"If you chose null in the choice section, you should provide the most proper {self.item_name.en} not listed above. Otherwise output null."
                     )
                 )
@@ -129,9 +136,14 @@ class _SwitchTriggerExprop(_BaseTriggerExprop):
         return required_params
 
 class _MeterTriggerExprop(_BaseTriggerExprop):
-    _template: ClassVar[str] = "common_meter_template"
     value_limits: list[float] = Field(min_length=2, max_length=2)
     curr_value: Optional[float] = None
+
+    @model_validator(mode="after")
+    def validate_limits(self):
+        if self.value_limits[0] > self.value_limits[1]:
+            raise ValueError("Trigger value_limits must be ordered from minimum to maximum")
+        return self
 
     def to_properties(self):
         lower, upper = self.value_limits
@@ -152,17 +164,16 @@ class _MeterTriggerExprop(_BaseTriggerExprop):
         return required_params
 
 class _BooleanTriggerExprop(_BaseTriggerExprop):
-    _template: ClassVar[str] = "customized"
 
     def to_properties(self):
         return []
 
 _Ct = str | BilingualText
 
-class BaseTrigger(BaseModel):
+class BaseTrigger(BaseModel, ABC):
     """Base class of MTrigger items."""
     template: ClassVar[str]
-    name: str
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     exprop: Optional[_BaseTriggerExprop] = None
 
     @abstractmethod 
@@ -173,10 +184,10 @@ class BaseTrigger(BaseModel):
         return None, []
 
 class AffectionTrigger(BaseTrigger):
-    template = "common_affection_template"
+    template: Literal["common_affection_template"]
 
     def to_tool(self, curr_aff: Optional[int] = None):
-        if curr_aff:
+        if curr_aff is not None:
             curr_aff_str = f', 当前好感度是{curr_aff}'
             curr_aff_str_en = f', current affection is {curr_aff}'
         else:
@@ -184,8 +195,8 @@ class AffectionTrigger(BaseTrigger):
         return WrappedOpenAITool(
             self.name,
             _Bt(
-                f"调整角色对用户的好感度值{curr_aff_str}.",
-                f"Call this tool to change character's affection to user{curr_aff_str_en}.",
+                f"调整角色对用户的好感度值{curr_aff_str}. 该工具无需用户明确指示也可以调用.",
+                f"Call this tool to change character's affection to user{curr_aff_str_en}. This tool can be called without being explicitly requested by user.",
             ),
             requiredParams=[
                 WrappedOpenAIToolProperty(
@@ -208,7 +219,7 @@ class AffectionTrigger(BaseTrigger):
         return super().to_descr()
 
 class SwitchTrigger(BaseTrigger):
-    template = "common_switch_template"
+    template: Literal["common_switch_template"]
     exprop: _SwitchTriggerExprop
 
     def to_tool(self):
@@ -247,21 +258,25 @@ class SwitchTrigger(BaseTrigger):
             "Change ",
         )\
         + self.exprop.item_name\
-        + ": "\
-        + ", ".join(choose_list)
+        + ": "
+        
+        for index, i in enumerate(choose_list):
+            text += i
+            if index < len(choose_list) - 1:
+                text += ", "
 
-        l = choose_list
-        return text, l
+        choices = choose_list
+        return text, choices
 
 class MeterTrigger(BaseTrigger):
-    template = "common_meter_template"
+    template: Literal["common_meter_template"]
     exprop: _MeterTriggerExprop
 
     def to_tool(self):
         item_name = self.exprop.item_name
         curr_value = self.exprop.curr_value
 
-        if curr_value:
+        if curr_value is not None:
             curr_value_str = f', 当前值是{curr_value}'
             curr_value_str_en = f', current value is {curr_value}'
         else:
@@ -292,11 +307,11 @@ class MeterTrigger(BaseTrigger):
         )\
         + f"{self.exprop.value_limits[0]}~{self.exprop.value_limits[1]}"
 
-        l = [t1]
-        return text, l
+        choices = [t1]
+        return text, choices
 
 class BooleanTrigger(BaseTrigger):
-    template = "customized"
+    template: Literal["customized"]
     exprop: _BooleanTriggerExprop
 
     def to_tool(self):
@@ -317,10 +332,10 @@ class BooleanTrigger(BaseTrigger):
         )\
         + self.exprop.item_name
 
-        l = [text]
-        return text, l
+        choices = [text]
+        return text, choices
     
-TypeTrigger = Annotated[
+TypeTrigger: TypeAlias = Annotated[
     Union[
         AffectionTrigger,
         SwitchTrigger,

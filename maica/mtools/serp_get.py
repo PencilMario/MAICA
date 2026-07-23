@@ -11,13 +11,14 @@ _Bt = BilingualText
 
 async def internet_search(fsc: FullSocketsContainer, query):
     session = MaicaSession()
-    target_lang = session.default_target_lang = fsc.maica_settings.basic.target_lang
+    target_lang = fsc.maica_settings.basic.target_lang
     conn = fsc.mnerve_conn or fsc.mfocus_conn
 
     @Decos.conn_retryer_factory()
     async def _search(fake_self, query, target_lang):
         res_m = await (providers.get_asearch())(query, target_lang)
-        assert res_m.results, 'Search result is empty'
+        if not res_m.results:
+            raise MaicaInternetWarning('Search result is empty')
         return res_m
 
     results_list = []
@@ -25,17 +26,16 @@ async def internet_search(fsc: FullSocketsContainer, query):
         res_m = await _search(DummyClass(name="serp"), query, target_lang)
 
         for index, res_i in enumerate(res_m.results):
-            results_list += (
-                f"{index + 1}. "
-                f"({res_i.source})" if res_i.source else ""
-                f"{res_i.title}: {res_i.description}"
+            source = f"({res_i.source}) " if res_i.source else ""
+            results_list.append(
+                f"{index + 1}. {source}{res_i.title}: {res_i.description}"
             )
 
-        await messenger(info=f'MFocus got {len(res_m.results)} information lines from search engine', type=MsgType.INFO)
+        sync_messenger(info=f'MFocus got {len(res_m.results)} information lines from search engine', type=MsgType.INFO)
 
     except Exception as e:
         res_m = None
-        await messenger(fsc.websocket, "mfocus_serp_failed", f"MFocus serp failed: {str(e)}", '408', fsc.tracker_id)
+        await messenger(fsc.websocket, "mfocus_serp_failed", f"MFocus serp failed: {str(e)}", 408, fsc.tracker_id)
 
     # Early return if llm conc not required
     if not results_list:
@@ -68,12 +68,13 @@ If none of the information is relevant with query, you can output null.\
 
         user_query = MaicaSessionItem(
             "user",
-            f'Information: {'; '.join(results_list)}\nQuestion: {query}'
+            f'Information: {'; '.join(results_list)}\nQuestion: {query}',
+            target_lang=target_lang,
         )
         session.append(user_query)
 
         completion_args = {
-            "messages": session.utilize(
+            "input": session.utilize(
                 manual_prompt=True,
                 ignore_additions=True,
             ),

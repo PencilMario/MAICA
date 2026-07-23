@@ -46,8 +46,9 @@ async def asearch(query, target_lang: Literal['zh', 'en', 'auto']='zh'):
     }
     json_payload = json.dumps(payload)
 
-    async with httpx.AsyncClient(proxy=G.A.PROXY_ADDR) as client:
+    async with httpx.AsyncClient(proxy=G.A.PROXY_ADDR or None) as client:
         response = await client.post(url, headers=headers, data=json_payload, timeout=30)
+        response.raise_for_status()
         response_json = response.json()
 
     # print(json.dumps(response_json, ensure_ascii=False, indent=2))
@@ -66,4 +67,3 @@ if __name__ == "__main__":
         print(res)
 
     asyncio.run(main())
-    

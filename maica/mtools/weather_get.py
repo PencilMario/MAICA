@@ -17,15 +17,16 @@ class GeoResults(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def compat_gaode(cls, data: dict):
-        if isinstance(data.get("geocodes"), list):
-            data["results"] = [
-                {
-                    "latitude": i["location"].split(',')[1],
-                    "longitude": i["location"].split(',')[0],
-                }
-                for i in data["geocodes"]
-            ]
+    def compat_gaode(cls, data: Any):
+        if isinstance(data, dict):
+            if isinstance(data.get("geocodes"), list):
+                data["results"] = [
+                    {
+                        "latitude": i["location"].split(',')[1],
+                        "longitude": i["location"].split(',')[0],
+                    }
+                    for i in data["geocodes"]
+                ]
         return data
 
 class WeatherResults(BaseModel):
@@ -43,27 +44,28 @@ class WeatherResults(BaseModel):
         precipitation_probability_max: int
 
     current: Current
-    daily: List[Forecast]
+    daily: List[Forecast] = Field(min_length=1)
     geoloc: Optional[GeoResults.GeoLoc] = None
 
     @model_validator(mode="before")
     @classmethod
-    def reshape_daily(cls, data: dict):
-        if isinstance(data.get("daily"), dict):
+    def reshape_daily(cls, data: Any):
+        if isinstance(data, dict):
+            if isinstance(data.get("daily"), dict):
 
-            daily = data["daily"]
-            keys = [
-                "time",
-                "temperature_2m_max",
-                "temperature_2m_min",
-                "precipitation_probability_max",
-            ]
-            rows = [
-                dict(zip(keys, values))
-                for values in zip(*(daily[k] for k in keys))
-            ]
+                daily = data["daily"]
+                keys = [
+                    "time",
+                    "temperature_2m_max",
+                    "temperature_2m_min",
+                    "precipitation_probability_max",
+                ]
+                rows = [
+                    dict(zip(keys, values))
+                    for values in zip(*(daily[k] for k in keys))
+                ]
 
-            data["daily"] = rows
+                data["daily"] = rows
 
         return data
     
@@ -101,7 +103,8 @@ async def _name_to_loc(name: str):
 
 async def _name_to_loc_gaode(name: str):
     gaode_key = TpAPIKeys.GAODE_WEATHER
-    assert gaode_key, "GaoDe key not configured"
+    if not gaode_key:
+        raise MaicaInternetWarning("GaoDe key not configured")
 
     geo = await dld_json(
         "https://restapi.amap.com/v3/geocode/geo",
@@ -113,6 +116,17 @@ async def _name_to_loc_gaode(name: str):
     )
     geo_m = GeoResults.model_validate(geo)
     return geo_m
+
+async def name_to_loc(name: str):
+    try:
+        locs = await _name_to_loc(name)
+    except Exception as e1:
+        try:
+            locs = await _name_to_loc_gaode(name)
+        except Exception as e2:
+            raise MaicaConnectionWarning(f"All geolocation apis failed for {name}: {str(e1)}; {str(e2)}")
+        
+    return locs
 
 async def _loc_to_weather(loc: GeoResults.GeoLoc):
     weather = await dld_json(
@@ -144,13 +158,7 @@ async def _loc_to_weather(loc: GeoResults.GeoLoc):
 
 async def weather_api_get(location):
     try:
-        try:
-            locs = await _name_to_loc(location)
-        except Exception as e1:
-            try:
-                locs = await _name_to_loc_gaode(location)
-            except Exception as e2:
-                raise MaicaConnectionWarning(f"All geolocation apis failed for {location}: {str(e1)}; {str(e2)}")
+        locs = await name_to_loc(location)
 
         loc = locs.results[0]
         weather = await _loc_to_weather(loc)
@@ -158,8 +166,8 @@ async def weather_api_get(location):
         weather.geoloc = loc
         return weather
     
-    except CommonMaicaException as ce:
-        raise ce
+    except CommonMaicaException:
+        raise
     
     except Exception as e:
         raise MaicaInternetWarning(f'Weather API failed: {str(e)}', '406') from e

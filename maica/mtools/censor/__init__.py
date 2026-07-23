@@ -16,18 +16,23 @@ from flashtext import KeywordProcessor
 from typing import *
 from maica.maica_utils import *
 
-kp = KeywordProcessor()
+kp: KeywordProcessor
 
 def pkg_init_censor():
     global kp
     try:
+        kp = KeywordProcessor()
         base_path = get_inner_path('mtools/censor')
-        censor_file_entries = os.scandir(base_path)
         censor_set = set()
-        for entry in censor_file_entries:
-            if entry.is_file() and entry.name.endswith('.txt'):
-                with open(entry.path, 'r') as file:
-                    censor_set.update(file.read().splitlines())
+        with os.scandir(base_path) as censor_file_entries:
+            for entry in censor_file_entries:
+                if entry.is_file() and entry.name.endswith('.txt'):
+                    with open(entry.path, 'r', encoding='utf-8') as file:
+                        censor_set.update(
+                            line.strip()
+                            for line in file
+                            if line.strip()
+                        )
         for kw in censor_set:
             kp.add_keyword(kw)
 
@@ -36,9 +41,9 @@ def pkg_init_censor():
     except Exception as e:
         sync_messenger(info=f"[maica-cnsr] Censor patterns may not exist: {str(e)}, ignoring and continuing", type=MsgType.DEBUG)
 
-async def has_censored(text) -> list:
+async def has_censored(text):
     """If there are censored words in text, or how many."""
-    found = await wrap_run_in_exc(None, kp.extract_keywords, text)
+    found = await asyncio.to_thread(kp.extract_keywords, text)
     return set(found)
 
 __all__ = ['has_censored']

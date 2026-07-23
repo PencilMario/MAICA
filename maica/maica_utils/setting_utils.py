@@ -11,11 +11,15 @@ from pydantic import (
 from .gvars import *
 from .maica_utils import *
 
+_Bt = BilingualText
+
 class SettingsModel(BaseModel):
     """Just a template."""
     model_config = ConfigDict(
         validate_assignment=True
     )
+
+class IdentitySettingsModel(SettingsModel, PydHardResetMixin): ...
 
 def create_prop(
         name: str,
@@ -48,20 +52,21 @@ def create_prop(
 
 def read_exist(self, n, v, **kwargs):
     """Value must exist on get."""
-    assert v
+    if not v:
+        raise MaicaPermissionError(f"{n} must be assigned before access")
     return v
 
 def set_locked(self, n, v, **kwargs):
     """Value can only be rewritten from None."""
     prv_n = f"_{n}"
     if getattr(self, prv_n) is not None:
-        print(getattr(self, prv_n))
-    assert getattr(self, prv_n) is None
+        raise MaicaPermissionError(f"{n} is locked")
     return v
 
 def set_literal(self, n, v, valid: list[any], **kwargs):
     """Value must in valid list on set."""
-    assert v in valid
+    if v not in valid:
+        raise MaicaPermissionError(f"{n} must be one of {valid}")
     return v
 
 def set_range(self, n, v, lower: Union[int, float], upper: Union[int, float], soft_limit: bool=False, **kwargs):
@@ -79,7 +84,8 @@ def set_range(self, n, v, lower: Union[int, float], upper: Union[int, float], so
         if v != new_v:
             sync_messenger(info=f"{n}={v} out of range [{lower}, {upper}], limiting to {new_v}")
             v = new_v
-    assert lower <= v <= upper
+    if not lower <= v <= upper:
+        raise MaicaPermissionError(f"{n} must be between {lower} and {upper}")
     return v
 
 def set_instance(self, n, v, types: list[type], **kwargs):
@@ -92,57 +98,59 @@ def set_instance(self, n, v, types: list[type], **kwargs):
             if v is None:
                 break
     else:
-        raise AssertionError
+        raise MaicaPermissionError(f"{v} must be in types {types}")
     return v
 
-class ConfigurableSettingsModel(SettingsModel):
+class ConfigurableSettingsModel(SettingsModel, PydUpdateMixin, PydSoftResetMixin):
     """Do not use on cridentials."""
     @model_validator(mode="before")
     @classmethod
     def none_is_default(cls, data: Any):
         if isinstance(data, dict):
             for field_name, field_info in cls.model_fields.items():
-                default = field_info.default
-                expected_type = field_info.annotation
-
                 value = data.get(field_name)
-                if (
-                    field_name in data
-                    and value == None
-                    and not isinstance(value, expected_type)
-                ):
-                    data[field_name] = default
+                if field_name in data and value is None:
+                    default_value = field_info.get_default(call_default_factory=True)
+                    if default_value is not None:
+                        data[field_name] = default_value
         return data
-    
-    def update(self, m):
-        """Updating from a dict, or something alike."""
-        for k, v in m.items():
-            if k in self.__class__.model_fields:
-                setattr(self, k, v)
 
 class MaicaSettings(BaseModel):
     """All the per-client settings for MAICA."""
 
-    class Identity(SettingsModel):
-        """Note that this identity is not verified and not safe to use in most cases. Use verification for those."""
+    # class Identity(IdentitySettingsModel):
+    #     """Note that this identity is not verified and not safe to use in most cases. Use verification for those."""
+
+    #     _user_id: int = None
+    #     _username: str = None
+    #     _nickname: Optional[str] = None
+    #     _email: str = None
+
+    #     user_id = create_prop('user_id', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [int]})
+    #     username = create_prop('username', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [str]})
+    #     nickname = create_prop('nickname', setter_ext=[set_instance], setter_kwargs={"types": [str, None]})
+    #     email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [str]})
+
+    class Verification(IdentitySettingsModel):
+        """Verified identity, safe to use."""
 
         _user_id: int = None
         _username: str = None
         _nickname: Optional[str] = None
         _email: str = None
 
-        user_id = create_prop('user_id', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [int]})
-        username = create_prop('username', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [str]})
-        nickname = create_prop('nickname', setter_ext=[set_instance], setter_kwargs={"types": [str, None]})
-        email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_instance], setter_kwargs={"types": [str]})
-
-    class Verification(Identity):
-        """Verified identity, safe to use."""
-
-        user_id = create_prop('user_id', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [int]})
-        username = create_prop('username', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [str]})
-        # nickname = create_prop('nickname', setter_ext=[set_instance], setter_kwargs={"types": [str, None]})
-        email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [str]})
+        # Keep type declarations visible to static analyzers without exposing them
+        # to Pydantic, which would treat each property object as a field default.
+        if TYPE_CHECKING:
+            user_id: int
+            username: str
+            nickname: Optional[str]
+            email: str
+        else:
+            user_id = create_prop('user_id', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [int]})
+            username = create_prop('username', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [str]})
+            nickname = create_prop('nickname', setter_ext=[set_instance], setter_kwargs={"types": [str, None]})
+            email = create_prop('email', getter_ext=[read_exist], setter_ext=[set_locked, set_instance], setter_kwargs={"types": [str]})
 
     class Basic(ConfigurableSettingsModel):
         """Major params that decide MAICA's behavior."""
@@ -171,6 +179,8 @@ class MaicaSettings(BaseModel):
 
         prompt_pname_repl: bool = False
         """Use name from savefile instead of [player] in prompts."""
+        prompt_allow_nickname: bool = False
+        """Allow model to generate [player_nickname]."""
         mf_llm_concl: bool = False
         """Use agent model's final output instead of instructed guidance."""
         mf_sf_access_impl: Literal[0, 1, 2] = 1
@@ -230,15 +240,68 @@ class MaicaSettings(BaseModel):
             le=1.0,
         )
 
-    class Temp(SettingsModel):
-        """Should be reset after each round of completion."""
+    class Temp(ConfigurableSettingsModel):
+        """
+        Should be reset after each round of completion.
+        Caution: This does not verify many things itself, especially when it comes to session -1 or things.
+        Related verifications should be in ws_config.
+        """
+
+        class MSpire(ConfigurableSettingsModel):
+
+            class MsFromCacheResult(BaseModel):
+                hash: Optional[str] = None
+                result: Optional[str] = None
+
+            type: Literal[
+                "precise_page",
+                "fuzzy_page",
+                "in_precise_category",
+                "in_fuzzy_category",
+                "in_fuzzy_all",
+            ] = "in_fuzzy_all"
+            sample: int = Field(
+                default=250,
+                ge=2,
+                le=250,
+            )
+            ctg_weight: int = Field(
+                default=10,
+                ge=1,
+                le=100,
+            )
+            title: Union[str, list] = Field(
+                default_factory=lambda: [
+                    _Bt('自然', 'Nature'),
+                    _Bt('自然科学', 'Natural_sciences'),
+                    _Bt('社会', 'Society'),
+                    _Bt('人文學科', 'Humanities'),
+                    _Bt('世界', 'World'),
+                    _Bt('生活', 'Health'),
+                    _Bt('艺术', 'The_arts'),
+                    _Bt('文化', 'Culture'),
+                ]
+            )
+            use_cache: bool = False
+            _mfc_m: Optional[MsFromCacheResult] = None
+
+            @model_validator(mode="after")
+            def enhanced_defaults(self):
+                if isinstance(self.title, str):
+                    self.title = [self.title]
+
+                return self
 
         class MPostal(ConfigurableSettingsModel):
-            """We add this because mp settings is complex."""
             header: Optional[str] = None
             content: Optional[str] = None
-            twk_super: bool = True
-            strict_conv: bool = False
+
+        class MVista(ConfigurableSettingsModel):
+            mv_imgs: Optional[list] = Field(
+                default=None,
+                max_length=3,
+            )
+            """List of MVista images urls."""
 
         class Common(ConfigurableSettingsModel):
             """These are used by several m-things."""
@@ -248,29 +311,45 @@ class MaicaSettings(BaseModel):
             """Bypass MTrigger once."""
             bypass_stream: bool = False
             """Bypass stream output once."""
+            twk_super: bool = False
+            """Tweak super params (for written language)."""
+            strict_conv: bool = True
+            """Restrict conversation schema."""
 
         chat_session: int = Field(
             default=0,
             ge=-1,
             le=9,
         )
-        mv_imgs: Optional[list] = None
-        """List of MVista images urls."""
+        """This is standalone because it's important."""
+        activated: Literal["query", "mspire", "mpostal"] = "query"
 
+        mspire: MSpire = Field(default_factory=MSpire)
         mpostal: MPostal = Field(default_factory=MPostal)
+        mvista: MVista = Field(default_factory=MVista)
         common: Common = Field(default_factory=Common)
 
-    identity: Identity = Field(default_factory=Identity)
-    verification: Verification = Field(default_factory=Verification)
+    # identity: Identity = Field(
+    #     default_factory=Identity,
+    #     exclude=True,
+    # )
+    verification: Verification = Field(
+        default_factory=Verification,
+        exclude=True,
+    )
     basic: Basic = Field(default_factory=Basic)
     extra: Extra = Field(default_factory=Extra)
     super: Super = Field(default_factory=Super)
-    temp: Temp = Field(default_factory=Temp)
+    temp: Temp = Field(
+        default_factory=Temp,
+        exclude=True,
+    )
 
     @property
     def use_mf_now(self):
         return (
             self.basic.enable_mf
+            and self.prompt_writable
             and not self.temp.common.bypass_mf
         )
 
@@ -280,6 +359,34 @@ class MaicaSettings(BaseModel):
             self.basic.enable_mt
             and not self.temp.common.bypass_mt
         )
+    
+    @property
+    def use_stream_now(self):
+        return (
+            self.basic.stream_output
+            and not self.temp.common.bypass_stream
+        )
+
+    @property
+    def prompt_writable(self):
+        return (
+            self.temp.chat_session >= 0
+        )
+    
+    @property
+    def super_writable(self):
+        return (
+            not self.temp.mspire.use_cache
+        )
+    
+    @property
+    def skip_generation(self):
+        if (
+            self.temp.mspire._mfc_m
+            and self.temp.mspire._mfc_m.result
+        ):
+            return self.temp.mspire._mfc_m.result
+        return False
 
     def reset(self):
         """This resets temp together with soft_reset."""
@@ -314,7 +421,7 @@ if __name__ == "__main__":
 
     some_data = {
         "bypass_stream": True,
-        "mpostal": {
+        "common": {
             "strict_conv": True,
         }
     }
@@ -323,3 +430,4 @@ if __name__ == "__main__":
     print(ms.temp)
 
     # ms.basic.savefile_access = 123
+

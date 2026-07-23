@@ -1,10 +1,23 @@
 """Import layer 0"""
+from __future__ import annotations
+
 import os
+import asyncio
 
 from dataclasses import dataclass
 from typing import *
 
-online_dict = {}
+if TYPE_CHECKING:
+    from maica.maica_utils import FullSocketsContainer
+
+online_dict: dict[
+    int,
+    Tuple[
+        FullSocketsContainer,
+        asyncio.Lock
+    ]
+] = {}
+online_dict_guard = asyncio.Lock()
 
 def pkg_init_gvars():
     global G

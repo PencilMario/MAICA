@@ -1,7 +1,13 @@
 I'm sorry for not offering an English ver of this document but it's just too much work for me.
 If you want to read in English, use a translator.
 
-= 更新会话管理到v2
++ 数据结构验证普遍采用pydantic
+
++ 数据库交互普遍采用sqlalchemy
+
++ 添加与RAG相关的支持
+
++ 更新会话管理到v2
 
 + 添加MVista的native实现(需要核心模型支持vl)
 
@@ -20,8 +26,6 @@ If you want to read in English, use a translator.
 
 = tz移动到常规设置
 
-+ 添加RAG和embedding基建
-
 + 添加语言auto的支持
 
 + 添加高级设置mf_sf_access_impl
@@ -30,7 +34,7 @@ If you want to read in English, use a translator.
 
 + 现在发送maica_mcore_gen_start标记断点续传介入
 
-- 弃用mas_hf_hcb
+- 弃用mas_sf_hcb
 
 = affection trigger的参数键改为alter_value
 
@@ -42,7 +46,7 @@ If you want to read in English, use a translator.
 
 - 弃用mf_const_tools == 3
 
-= 现在serp采用标准数据模型
+= 现在第三方serp注册采用标准数据模型
 
 = sf_extraction更名为savefile_access
 
@@ -53,3 +57,55 @@ If you want to read in English, use a translator.
 = MPostal ic_prep更名为twk_super
 
 = legality接口查询地址现在返回经纬度
+
+- 弃用websocket不传入type的自动类型推断
+
++ MSpire添加参数ctg_weight
+
+= MSpire的use_cache参数变为条目内参数
+
++ 整理mp部分配置为MSpire, MPostal通用高级配置
+
+- 弃用了ms, mp的简单模式. 对于ms, 现在传空字典{}以采用默认配置
+
+= websocket信息中的code现在是int
+
+- 弃用了反劫持cookie, 纯自欺欺人来的
+
+= maica_model_mvista等变为maica_feature_mvista等
+
+= maica_loop_warn_continue变为maica_loop_warn_reset
+
+= 应该还有更多状态码变了, 具体根据用的找吧
+
+= 非流式输出的状态码与流式输出统一
+
++ 添加高级参数prompt_allow_nickname
+
+= 现在连接初始化消息原生双语(用|分隔)
+
++ 长连接限长调整至64KB, query调整至4/16KB
+
++ 短连接限长调整至1MB(MVista是32MB)
+
++ 添加按键取出账号级偏好功能
+
+- 弃用账号级偏好的删除端点, 重置端点改为覆盖修改
+
+- 弃用处理表情端点, 其功能已由pprt覆盖
+
+= 拆分了mv图片列举和下载端点
+
++ mas_player_additions扩容到最多512条, 每条最长1536字节
+
+- 弃用了mas_player_additions静默允许超长, 现在超长会拒绝
+
+- 现在对mt的验证要求更严格, 例如switch的条目均必须是str
+
++ gpt建议用http标头传递短连接的token, 并做了兼容
+
+- 现在mt的所有字符串条目长度不允许超过256
+
+- 现在不再允许mt触发器数量超出上限
+
+- 现在savefile和trigger均严格对照session num, 不再采用0作为默认

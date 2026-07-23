@@ -1,6 +1,5 @@
 import asyncio
 import re
-from typeguard import check_type
 from typing import *
 from .post_proc import post_proc
 from maica.maica_utils import *
@@ -81,7 +80,13 @@ class TalkSplitV2():
 
     def split_present_sentence(self):
         """Main function."""
-        apc=[]; upc=[]; spc=[]; cpc=[]; epc=[]; slc=[]; src=[]
+        apc = []
+        upc = []
+        spc = []
+        cpc = []
+        epc = []
+        slc = []
+        src = []
         length_present = len(self.sentence_present.encode())
 
         if length_present <= 60:
@@ -108,12 +113,13 @@ class TalkSplitV2():
                     else:
                         rc += 1
 
-            return True if lc <= rc else False
+            return lc == rc
             
         def split_at_pos(pos):
             """Just split."""
             sce = self.sentence_present[0:pos]
             self.sentence_present = self.sentence_present[pos:]
+
             if len(sce) > 1 and not sce.isspace():
                 return sce.lstrip()
             else:
@@ -121,7 +127,8 @@ class TalkSplitV2():
 
         matches = pattern_all_punc.finditer(self.sentence_present)
         for match in matches:
-            pos = match.end(); content = match.group()
+            pos = match.end()
+            content = match.group()
             apc.append(match)
             if len(content) > 1 or not self._is_decimal(('   ' + self.sentence_present + ' ')[pos:pos+5]):
                 if has_words_in(content, *list_uncrit_punc):
@@ -176,7 +183,16 @@ class TalkSplitV2():
             for match in reversed(apc):
                 if 3 <= get_pos_len(match.end()) <= self._split_limit + 20:
                     return split_at_pos(match.end())
-        return split_at_pos(get_pos_len(self._split_limit + 20))
+        byte_limit = self._split_limit + 20
+        byte_count = 0
+        char_position = len(self.sentence_present)
+        for index, char in enumerate(self.sentence_present, start=1):
+            char_size = len(char.encode("utf-8"))
+            if byte_count + char_size > byte_limit:
+                char_position = max(1, index - 1)
+                break
+            byte_count += char_size
+        return split_at_pos(char_position)
     
     def announce_stop(self) -> List[str]:
         """Exhausts remaining buffer."""
@@ -255,31 +271,22 @@ class TalkSplitV2():
 
 class PPRTProcessor():
     """Post proc realtime processor."""
-    @Decos.report_limit_warning
-    def __init__(self, fsc: FullSocketsContainer, pprt: Union[dict, bool]=True):
-        self._pprt = {
-            "yield_interval": [40, 20, 10, 5, 3, 1],
-            "split_limit": 180,
-            "correct_malform": True,
-        }
-        # Compatibility consideration
-        if pprt == False:
-            pprt = {
-                "split_limit": -1,
-                "correct_malform": False,
-            }
+    def __init__(self, fsc: FullSocketsContainer, pprt: Union[bool, WsQueryConfig.PprtConfig] = True):
+        if pprt is True:
+            pprt = WsQueryConfig.PprtConfig()
+        elif pprt is False:
+            pprt = WsQueryConfig.PprtConfig(
+                split_limit=-1,
+                correct_malform=False,
+            )
+        self._pprt = pprt
 
-        if isinstance(pprt, dict):
-            self._pprt.update(pprt)
-            check_type(self._pprt.get('yield_interval'), List[int])
-            check_type(self._pprt.get('split_limit'), int)
+        self.fsc = fsc
 
-        self._target_lang = fsc.maica_settings.basic.target_lang
-        self._mnerve_conn = fsc.mnerve_conn
-        if self._pprt.get('split_limit') > 0:
-            self._buffer = TalkSplitV2(self._pprt.get('split_limit'))
+        if self._pprt.split_limit > 0:
+            self._buffer = TalkSplitV2(self._pprt.split_limit)
         else:
-            self._pprt['yield_interval'] = [1]
+            self._pprt.yield_interval = [1]
             self._buffer = TalkSplitPlain()
 
         self._add_counter = 0
@@ -294,7 +301,7 @@ class PPRTProcessor():
 
     async def store_and_split(self, chunk: str) -> Optional[str]:
         self._add_chunk(chunk)
-        if self._add_counter >= sum(self._pprt['yield_interval'][:self._yield_counter + 1]):
+        if self._add_counter >= sum(self._pprt.yield_interval[:self._yield_counter + 1]):
             split = self._buffer.split_present_sentence()
             if split:
                 return await self._correct_malform(split)
@@ -303,12 +310,12 @@ class PPRTProcessor():
                 return None
             
     async def _correct_malform(self, sentence: str) -> str:
-        if self._pprt.get('correct_malform'):
-            return await post_proc(sentence, self._target_lang, self._mnerve_conn)
+        if self._pprt.correct_malform:
+            return await post_proc(sentence, self.fsc)
         else:
             return sentence
 
-    async def exaust_and_split(self, chunk: str='') -> list[str]:
+    async def exhaust_and_split(self, chunk: str='') -> list[str]:
         if chunk:
             self._add_chunk(chunk)
         splits = self._buffer.announce_stop()
@@ -324,6 +331,6 @@ if __name__ == "__main__":
         sce = asyncio.run(pprtp.store_and_split(c))
         if sce:
             print(sce)
-    sces = asyncio.run(pprtp.exaust_and_split())
+    sces = asyncio.run(pprtp.exhaust_and_split())
     for sce in sces:
         print(sce)

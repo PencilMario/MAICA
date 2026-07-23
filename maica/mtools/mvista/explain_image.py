@@ -9,10 +9,11 @@ _Bt = BilingualText
 async def query_vlm(fsc: FullSocketsContainer, query: str, img_list: list[str]):
     """Ask the vlm about imgs provided. Only used if not is_mcore_vl."""
     session = MaicaSession()
-    target_lang = session.default_target_lang = fsc.maica_settings.basic.target_lang
+    target_lang = fsc.maica_settings.basic.target_lang
     conn = fsc.mvista_conn
 
-    assert len(img_list) <= int(G.A.KEEP_MVISTA), f"{G.A.KEEP_MVISTA} images at most per query"
+    if len(img_list) > int(G.A.KEEP_MVISTA):
+        raise MaicaInputWarning(f"{G.A.KEEP_MVISTA} images at most per query")
 
     class VistaSearchConcl(BaseModel):
         reply: Optional[str] = Field(
@@ -21,12 +22,12 @@ async def query_vlm(fsc: FullSocketsContainer, query: str, img_list: list[str]):
 
     system = MaicaSessionItem(
         "system",
-        _Bt(f"""\
+        _Bt("""\
 你是一个人工智能助手, 你接下来会收到一到数张图片和一个问题.
 你应根据问题和图片中的内容, 以一个简洁客观的自然句作出回答.
 如果没有任何图片与问题相关, 你可以输出null.\
 """,
-f"""\
+"""\
 You are a helpful assistant, now you will recieve one or several images and a query.
 According to the images, answer briefly and objectively in a concise natural sentence.
 If none of the images is relevant with query, you can output null.\
@@ -38,14 +39,15 @@ If none of the images is relevant with query, you can output null.\
     user_query = MaicaSessionItem(
         "user",
         query,
+        target_lang=target_lang,
         context={
             "image_urls": img_list
-        }
+        },
     )
     session.append(user_query)
 
     completion_args = {
-        "messages": session.utilize(
+        "input": session.utilize(
             text_only=False,
             manual_prompt=True,
             ignore_additions=True,
@@ -63,8 +65,6 @@ If none of the images is relevant with query, you can output null.\
     reply_result = VistaSearchConcl.model_validate_json(resp.output_text)
 
     text = reply_result.reply
-        
-    await messenger(None, 'mfocus_mvista_acquire', f"\nMFocus toolchain calling MVista, response is:\n{text}\nEnd of MFocus toolchain calling MVista", '201')
     
     return text
 
