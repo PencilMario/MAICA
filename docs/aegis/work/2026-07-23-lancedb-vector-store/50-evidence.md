@@ -13,12 +13,22 @@
 
 ## Nuitka verification
 
+- The full `build_local.ps1 -UseZig` run exited zero after 2,213 seconds and
+  produced `build/maica_starter.exe` (306.82 MiB) and
+  `build/create_account.exe` (9.49 MiB).
+- Running `build/maica_starter.exe -t print` failed before application startup:
+  `dns.rdtypes.ANY.URI` could not import the standard-library `struct` module.
+  This confirms the build script's file-existence check is insufficient.
 - Nuitka 4.0 with Zig 0.16.0 successfully compiled the probe as onefile.
 - The resulting executable was 240,290,992 bytes.
 - The executable failed during Python initialization before probe code ran:
   `dns.rdtypes.IN.KX` could not import the `dns` package.
 - Rebuilding with `--include-package=dns` reproduced the same initialization
   failure. This rules out a simple missing-module collection flag.
+- Rebuilding the probe with both `--include-package=dns` and
+  `--include-module=struct` also failed before application startup, reporting
+  that `dns.rdtypes.IN.KX` could not import the top-level `dns` package. The
+  ineffective flags were not retained in `build_local.ps1`.
 - LanceDB 0.25 and later, including 0.34, depend on `lance-namespace`; 0.24.3
   lacks a Windows wheel. Therefore version pinning cannot remove that network
   stack while retaining a supported Windows binary.
