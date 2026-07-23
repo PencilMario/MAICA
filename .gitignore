@@ -181,6 +181,8 @@ bash/
 persistents/
 triggers/
 browser-state*
+.playwright-mcp/
+x/
 
 easter_egg.py
 test/
