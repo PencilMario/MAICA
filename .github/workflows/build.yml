@@ -32,8 +32,8 @@ jobs:
           nuitka-version: main
           script-name: maica/maica_starter.py
           mode: app
-          include-package: websockets,magic,packaging
-          include-package-data: magic
+          include-package: websockets,magic,packaging,dns
+          include-package-data: magic,struct
 
 
       - name: Upload MAICA Executable
