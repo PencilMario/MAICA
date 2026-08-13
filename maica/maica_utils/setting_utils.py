@@ -163,7 +163,7 @@ class MaicaSettings(BaseModel):
         """Enable MTrigger."""
         savefile_access: bool = True
         """Enable savefile extraction."""
-        target_lang: Literal['zh', 'en', 'auto'] = 'zh'
+        target_lang: TargetLangType = 'zh'
         """Target language."""
         tz: Optional[str] = None
         """Timezone."""
@@ -179,13 +179,13 @@ class MaicaSettings(BaseModel):
 
         prompt_pname_repl: bool = False
         """Use name from savefile instead of [player] in prompts."""
-        prompt_allow_nickname: bool = False
+        prompt_allow_nickname: bool = True
         """Allow model to generate [player_nickname]."""
         mf_llm_concl: bool = False
         """Use agent model's final output instead of instructed guidance."""
         mf_sf_access_impl: Literal[0, 1, 2] = 1
         """Use RAG/Reranker to acquire info from persistent instead of traditional MFocus impl."""
-        mf_const_sf_access: Literal[0, 1, 2] = 1
+        mf_const_sf_access: Literal[0, 1, 2] = 0
         """Add persistent extraction to MFocus instructed guidance even if not called."""
         mf_const_tools: Literal[0, 1, 2] = 1
         """Add information to MFocus instructed guidance even if no tool used."""
@@ -193,11 +193,11 @@ class MaicaSettings(BaseModel):
         """Force agent to resort information acquired from Internet."""
         mf_precheck_mt: bool = True
         """Add MTrigger toollist to MFocus tools for a precheck."""
-        mt_concl_memory: Literal[0, 1, 2] = 1
+        memory_concl_arc: Literal[0, 1, 2] = 1
         """Conclude archived / purged sessions into summarizations."""
         nsfw_acceptive: bool = True
         """Alter prompt to ask model to handle toxic topics positively."""
-        mf_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 0
+        mf_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 1
         """Add history rounds for MFocus to understand the conversation."""
         mt_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 1
         """Add history rounds for MFocus to understand the conversation."""
@@ -270,7 +270,7 @@ class MaicaSettings(BaseModel):
                 ge=1,
                 le=100,
             )
-            title: Union[str, list] = Field(
+            title: Union[str, list[str | BilingualText]] = Field(
                 default_factory=lambda: [
                     _Bt('自然', 'Nature'),
                     _Bt('自然科学', 'Natural_sciences'),
@@ -358,6 +358,13 @@ class MaicaSettings(BaseModel):
         return (
             self.basic.enable_mt
             and not self.temp.common.bypass_mt
+        )
+
+    @property
+    def mf_concl_now(self):
+        return (
+            self.extra.mf_llm_concl
+            and not self.extra.mf_disable_loop
         )
     
     @property

@@ -1,10 +1,10 @@
 # It's suggested to exclude these lines (the top block) in your env configuration
 # Current backend version
-MAICA_CURR_VERSION = '1.2.006.rc5'
+MAICA_CURR_VERSION = '1.3.002'
 # Oldest capable backend version
-MAICA_LEGC_VERSION = '1.2.000.rc10'
+MAICA_LEGC_VERSION = '1.3.002'
 # Frontend version announcement(s)
-MAICA_BLESSLAND_CAPV = '1.7.1'
+MAICA_BLESSLAND_CAPV = '1.8.5'
 # cp ./env_basis ./.env
 # vim .env
 # Do not mv, rm or edit basis! They're required as default templates.
@@ -122,6 +122,8 @@ MAICA_WS_HOST = '0.0.0.0'
 MAICA_WS_PORT = '5000'
 MAICA_HTTP_HOST = '0.0.0.0'
 MAICA_HTTP_PORT = '6000'
+# Trust the leftmost xff address from upstream proxy or not
+MAICA_TRUST_XFF = '0'
 
 # Proxy used to access Internet - Not applied to inner connections
 MAICA_PROXY_ADDR = ''# socks5://192.168.1.1:7890
@@ -135,14 +137,27 @@ MAICA_DB_PASSWORD = ''# 123456
 MAICA_AUTH_DB = ''# forum_flarum_db
 # MySQL/SQLite maica database name
 MAICA_DATA_DB = 'maica'
-# Embedded LanceDB path for RAG. Keep this on persistent writable storage.
-MAICA_VECTOR_DB_PATH = 'fs_storage/vector_db'
-# Third party API keys, must be valid json
+# Vector db for Milvus RAG, url or file
+# Theoretically compatible with Milvus-Lite but doesn't work for me, so avoid
+MAICA_MILVUS_ADDR = ''# http://127.0.0.1:19530
+# Milvus database user / unused for lite
+MAICA_MILVUS_USER = ''# user
+# Milvus user password / unused for lite
+MAICA_MILVUS_PASSWORD = ''# 123456
+# Milvus database collection name
+MAICA_MILVUS_COLL = 'maica_rag'
+# Third party API settings, must be valid json
 MAICA_TP_APIS = '
     {
-        "GAODE_WEATHER": ""
+        "GAODE_WEATHER": "",
+        "SEARXNG_ADDR": "",
+        "SEARXNG_USE_PROXY": false
     }
 '
+# Comma-separated MVista host/IP/CIDR rules. Prefix a deny rule with !
+# Explicit host rules take precedence over its resolved IP; !* denies any unmarked host
+# Unmarked hosts are otherwise allowed after their resolved IPs pass deny rules
+MAICA_MVISTA_TRUSTED = '!10.0.0.0/8,!172.16.0.0/12,!192.168.0.0/16'
 
 
 # Account level behavior settings
@@ -155,6 +170,11 @@ MAICA_KICK_STALE_CONNS = '1'
 MAICA_F2B_COUNT = '20'
 # Fail2Ban time
 MAICA_F2B_TIME = '600'
+# Seconds allowed for a WebSocket connection to authenticate
+MAICA_AUTH_TIMEOUT = '60'
+# Enforce checking ToS updates using fof/terms, 0 for disabled
+# Use ids separated with commas for terms MAICA users have to check
+MAICA_TOS_IDS = '0'
 
 
 # Miscellaneous behavior settings
@@ -167,16 +187,10 @@ MAICA_GC_SESSIONS = '8'
 MAICA_ROTATE_MSCACHE = '0'
 # Keep [] MVista imgs per user at most
 MAICA_KEEP_MVISTA = '3'
-# Optional comma-separated host allow-list for image URLs sent to model servers.
-# Leave empty for compatibility; public deployments should set their upload host(s).
-MAICA_VISION_HOST_ALLOWLIST = ''
 # Delete each MVista img after [] hours or not
 MAICA_ROTATE_MVISTA = '8'
-# Enable MAICA X11 forwarding for special cases or not
-MAICA_ENABLE_X11 = '1'
-# No use online searching tool or do
-# It's OS dependent, performance consuming and relatively slow since it spawns a full Chrome instance on each search, but google hardly detects it in exchange
-MAICA_NO_SERP = '0'
+# Use responses standard searching tool instead of normal serp or not
+MAICA_RESPONSES_SERP = '1'
 # No send 5xx exceptions' real content or do
 MAICA_NO_SEND_ERROR = '0'
 # Core model chat generation prompt in ZH
@@ -301,6 +315,7 @@ MTTS_HTTP_PORT = '7000'
 # These fields of MAICA are used even for deploying MTTS only:
 # MAICA_IS_REAL_ENV (fill manually)
 # MAICA_OPENAI_TIMEOUT
+# MAICA_TRUST_XFF
 # MAICA_DB_ADDR (fill manually)
 # MAICA_DB_USER (fill manually)
 # MAICA_DB_PASSWORD (fill manually)
@@ -308,6 +323,7 @@ MTTS_HTTP_PORT = '7000'
 # MAICA_DATA_DB (fill manually)
 # MAICA_F2B_COUNT
 # MAICA_F2B_TIME
+# MAICA_TOS_IDS
 # MAICA_FULL_RESTFUL
 # MAICA_NO_SEND_ERROR
 # MAICA_DEV_STATUS

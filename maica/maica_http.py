@@ -1,5 +1,7 @@
 from quart import Quart, request, jsonify, send_file, Response
 from quart.views import View
+from quart.wrappers import Request as QuartRequest
+from quart.wrappers.request import Body as QuartBody
 import os
 import asyncio
 import json
@@ -11,6 +13,7 @@ import colorama
 import logging
 
 from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import RequestEntityTooLarge
 from hypercorn.config import Config
 from hypercorn.asyncio import serve
 from typing import *
@@ -33,6 +36,24 @@ _WATCHES_LIST = [
     "embedding",
     "reranking",
 ]
+
+_DEFAULT_CONTENT_LENGTH = 1 * 1024 * 1024
+_MVISTA_CONTENT_LENGTH = 32 * 1024 * 1024
+
+
+class AdjustableBody(QuartBody):
+    def set_max_content_length(self, limit, content_length=None):
+        self._max_content_length = limit
+        if limit is not None and (
+            (content_length is not None and content_length > limit)
+            or len(self._data) > limit
+        ):
+            self._must_raise = RequestEntityTooLarge()
+            self.set_complete()
+
+
+class MaicaRequest(QuartRequest):
+    body_class = AdjustableBody
 
 
 # ====================================================== Initiation and registration ======================================================
@@ -87,17 +108,19 @@ def pkg_init_maica_http():
     known_servers = json.loads(G.A.SERVERS_LIST)
 
 app = Quart(import_name=__name__)
+app.request_class = MaicaRequest
 app.config['JSON_AS_ASCII'] = False
-app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = _MVISTA_CONTENT_LENGTH
 
 quart_logger = logging.getLogger('hypercorn.error')
 quart_logger.disabled = True
 
-@app.before_request
-def set_max_content_length():
-    if request.endpoint == 'upload_vista':
-        request.max_content_length = 32 * 1024 * 1024
 
+@app.before_request
+def set_request_content_length():
+    limit = _MVISTA_CONTENT_LENGTH if request.endpoint == 'upload_vista' else _DEFAULT_CONTENT_LENGTH
+    request.max_content_length = limit
+    request.body.set_max_content_length(limit, request.content_length)
 
 # ====================================================== Initiation and registration ends ======================================================
 
@@ -206,29 +229,31 @@ class ShortConnHandler(View):
 
     async def dispatch_request(self, **kwargs):
         try:
-
-            # If validation required, we spawn stem instance
-            if self.val:
-                self.stem_inst = await NoWsCoroutine.async_create(self.fsc)
-                self.settings = self.fsc.maica_settings
-            else:
-                self.stem_inst = None
-                self.settings = None
-
             endpoint = request.endpoint
             function_routed = getattr(self, endpoint)
 
-            xff = request.headers.get('X-Forwarded-For')
+            xff = (
+                request.headers.get('X-Forwarded-For')
+                if int(G.A.TRUST_XFF)
+                else None
+            )
             if xff:
                 self.remote_addr = xff.split(',')[0].strip()
             else:
                 self.remote_addr = str(request.remote_addr)
 
-            if self.stem_inst:
-                self.stem_inst.remote_addr = self.remote_addr
-
             self.msg_http(info=f'Recieved request on API endpoint {endpoint}', type=MsgType.RECV)
             self.msg_http(info=f'From IP {self.remote_addr}', type=MsgType.DEBUG)
+
+            # If validation required, we spawn stem instance
+            if self.val:
+                self.stem_inst = await NoWsCoroutine.async_create(self.fsc)
+                self.stem_inst.remote_addr = self.remote_addr
+                self.settings = self.fsc.maica_settings
+            else:
+                self.stem_inst = None
+                self.settings = None
+
             result = await function_routed()
 
             # Printing
@@ -246,20 +271,17 @@ class ShortConnHandler(View):
 
         except CommonMaicaException as ce:
             _, _, message, _ = sync_messenger(error=ce)
+
             status_code = int(ce.error_code or 400)
             if not 400 <= status_code <= 599:
                 status_code = 400
-            return jsonify({"success": False, "exception": message}), status_code
+
+            status = ce.status
+            return jsonify({"success": False, "exception": f"{status}: {message}"}), status_code
 
         except Exception as e:
-            traceback.print_exc()
-            sync_messenger(info=f'Handler hit an unknown exception: {str(e)}', type=MsgType.ERROR)
-            message = (
-                "A critical exception happened serverside, contact administrator"
-                if int(G.A.NO_SEND_ERROR)
-                else str(e)
-            )
-            return jsonify({"success": False, "exception": message}), 500
+            _, _, message, _ = sync_messenger(info="Uncaught error happened in http handler: ", code=504, error=e)
+            return jsonify({"success": False, "exception": message}), 504
 
     async def wrapped_validate[T: BaseModel](
         self,
@@ -313,8 +335,14 @@ class ShortConnHandler(View):
 
         async with acquire_dbo("persistent", self.fsc) as persistent:
             persistent.load(query.content)
+
+            # We'll need a target lang here for embedding in correct language
+            target_lang = persistent.read_key("target_lang")
+            if target_lang:
+                self.fsc.maica_settings.basic.target_lang = target_lang
+
             await persistent.to_db(skip_sync=True)
-            await persistent.to_vector_store()
+            await persistent.to_vector()
  
         return jfy_res()
     
@@ -331,7 +359,7 @@ class ShortConnHandler(View):
         async with acquire_dbo("persistent", self.fsc) as persistent:
             persistent.clear()
             await persistent.to_db(skip_sync=True)
-            await persistent.to_vector_store(_data=[])
+            await persistent.to_vector(_data=[])
  
         return jfy_res()
         
@@ -380,7 +408,6 @@ class ShortConnHandler(View):
         query = await self.wrapped_validate(self._dlh_m, request.args.to_dict(flat=True))
 
         async with acquire_session(self.fsc) as session:
-            # It reports 404 on empty
             data_j = session.json()
 
         n = query.content * 2
@@ -523,7 +550,10 @@ class ShortConnHandler(View):
         )
         query = await self.wrapped_validate(self._dlt_m, data)
 
-        crid_m = FscUsersFuncMixin.TokenCridential.model_validate(query.content)
+        try:
+            crid_m = FscUsersFuncMixin.TokenCridential.model_validate(query.content)
+        except Exception as e:
+            raise MaicaInputWarning(f"Input validation failed: {str(e)}") from e
         token = await crid_m.generate_token()
 
         return jfy_res(token)
@@ -713,7 +743,7 @@ class ShortConnHandler(View):
 
     async def any_unknown(self):
         """Handles any unknown endpoint"""
-        sync_messenger(info=f"An unknown access to {request.full_path} handled", type=MsgType.LOG)
+        sync_messenger(info=f"An unknown {request.method} access to {request.full_path} handled", type=MsgType.LOG)
         return jsonify({"success": False, "exception": 'Unknown request endpoint or method'}), 404
 
 
@@ -756,8 +786,7 @@ async def prepare_thread(shutdown_trigger=None, **kwargs):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        error = CommonMaicaError(str(e), '504')
-        sync_messenger(error=error)
+        sync_messenger(info="Uncaught error happened in http: ", code=504, error=e)
         raise
 
     finally:

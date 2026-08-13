@@ -6,8 +6,6 @@ This could also include many things like saving session and MSpire cache.
 And quality check, for sure.
 """
 
-import asyncio
-
 from typing import *
 
 from .mtrigger_llm import MtPipeliner
@@ -47,6 +45,7 @@ async def post_core_pipelines(
                 'maica_quality_status',
                 [res, cfd],
                 200,
+                no_print=True,
             )
 
     async def save_ms_pipeline():
@@ -68,11 +67,10 @@ async def post_core_pipelines(
         ):
             
             archiver, stat = await session.crop_length()
-            if archiver:
+            if len(archiver) > 1:
 
-                if fsc.maica_settings.extra.mt_concl_memory >= 1:
+                if fsc.maica_settings.extra.memory_concl_arc >= 1:
                     # Means we should conclude memory on trim
-                    archiver[0].context.memory_concl = session[0].context.memory_concl
                     concl = await memory_concl(archiver, fsc)
 
                     if concl:
@@ -101,17 +99,16 @@ async def post_core_pipelines(
 
     # Finally, form all these together
     tasks_stages: list[list[Callable[[], Awaitable]]] = [
-        [mt_pipeline, quality_chk_pipeline, save_ms_pipeline],
-        [save_session_pipeline],
+        [
+            mt_pipeline,
+            quality_chk_pipeline,
+            save_ms_pipeline,
+        ],
+        [
+            save_session_pipeline, # We make it wait to avoid failure behavior inconsistency
+        ],
     ]
 
-    for stage in tasks_stages:
-        try:
-            async with asyncio.TaskGroup() as tg:
-                for task in stage:
-                    tg.create_task(task())
-        except* Exception as eg:
-            # We raise the first exception for common excepts to handle
-            raise eg.exceptions[0]
+    await run_staged_tasks(tasks_stages)
 
     # And we should be good to move on

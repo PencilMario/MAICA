@@ -14,28 +14,35 @@ from wikipediaapi import AsyncWikipedia, Namespace
 from maica.maica_utils import *
 from .censor import *
 
-# We need to apply some patches to make wikipediaapi work with proxy
-import httpx
+# We need an explicit lifecycle hook for the persistent async client.
 from wikipediaapi import AsyncHTTPClient, AsyncWikipediaResource
 
 class ProxiedAsyncHTTPClient(AsyncHTTPClient):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """
-        Patched to accept proxy params.
+        Keep the library client and expose its missing close hook.
         """
         super().__init__(*args, **kwargs)
-        self._client = httpx.AsyncClient(
-            headers=self._default_headers,
-            **self._client_kwargs,
-            # transport=httpx.AsyncHTTPTransport(),
-        )
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
 class ProxiedAsyncWikipedia(AsyncWikipediaResource, ProxiedAsyncHTTPClient):
     pass
 
+
 # We write the new wiki_get logics here
 # The former implementation is shit
+
+
+def _is_not_template(name: str):
+    name = convert(name.casefold().strip(), locale="zh-cn")
+    for template_kw in ("模板", "template"):
+        if name.startswith(template_kw) or name.endswith(template_kw):
+            return False
+    return True
+
 
 async def fetch_ms_meta(fsc: FullSocketsContainer):
     """Main."""
@@ -48,6 +55,19 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
         language = wiki_target_lang,
         proxy = G.A.PROXY_ADDR or None,
     )
+
+    try:
+        return await _fetch_ms_meta(fsc, wiki_cursor, target_lang, ms_m)
+    finally:
+        await wiki_cursor.close()
+
+
+async def _fetch_ms_meta(
+    fsc: FullSocketsContainer,
+    wiki_cursor: ProxiedAsyncWikipedia,
+    target_lang: str,
+    ms_m: MaicaSettings.Temp.MSpire,
+):
 
     async def inspect_page(title: str):
         await fsc.messenger(
@@ -72,11 +92,12 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
         cates = []
         pages = []
         for member in members.values():
-            match member.ns:
-                case Namespace.MAIN:
-                    pages.append(member.title)
-                case Namespace.CATEGORY:
-                    cates.append(member.title)
+            if _is_not_template(member.title):
+                match member.ns:
+                    case Namespace.MAIN:
+                        pages.append(member.title)
+                    case Namespace.CATEGORY:
+                        cates.append(member.title)
 
         sync_messenger(info=f"Found {len(cates)} categories and {len(pages)} pages underlying", type=MsgType.DEBUG)
         return cates, pages
@@ -113,6 +134,7 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
 
     async def fuzzy_search(kwd: str, ns: int = Namespace.MAIN, limit: int = 1):
         results = await wiki_cursor.search(
+            query=kwd,
             ns=ns,
             limit=limit
         )
@@ -138,18 +160,18 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
         case "in_precise_category":
             step_1 = await fuzzy_search(title, ns=Namespace.CATEGORY)
             step_2 = step_1[0]
-            recur_res = await recur_random(step_2, 7)
+            recur_res = await recur_random(step_2, 10)
             result = recur_res
 
         case "in_fuzzy_category":
             step_1 = await fuzzy_search(title, ns=Namespace.CATEGORY, limit=ms_m.sample)
             step_2 = choice(step_1)
-            recur_res = await recur_random(step_2, 7)
+            recur_res = await recur_random(step_2, 10)
             result = recur_res
 
         case "in_fuzzy_all":
             title = "Category:" + title
-            recur_res = await recur_random(title, 7)
+            recur_res = await recur_random(title, 10)
             result = recur_res
 
     result: list[str]
@@ -162,8 +184,8 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
         title = convert(title, 'zh-cn')
         summary = convert(summary, 'zh-cn')
 
-        if G.A.CENSOR_MSPIRE != '0':
-            tolerance = int(G.A.CENSOR_MSPIRE)
+        tolerance = int(G.A.CENSOR_MSPIRE or 0)
+        if tolerance:
 
             title_censor = await has_censored(title)
             summary_censor = await has_censored(summary)
@@ -175,6 +197,9 @@ async def fetch_ms_meta(fsc: FullSocketsContainer):
 
             elif len(total_censor):
                 sync_messenger(info=f"MSpire page {title} has censored words or phrases but ignored: {total_censor}", type=MsgType.DEBUG)
+
+            else:
+                sync_messenger(info=f"MSpire page {title} has nothing censored", type=MsgType.DEBUG)
 
         break
 
@@ -198,8 +223,8 @@ async def make_inspire(fsc: FullSocketsContainer):
     summary = ellipsis_large_str(summary)
 
     prompt = _Bt(
-        f"利用提供的以下信息, 主动阐明话题并和[player]聊聊{title}:\n{summary}\n\n你不必在输出中包含内容的全部信息, 但应当融入自己的理解与思考. 你的回答应当有开头招呼, 表现为由你自主发起话题, 并使用自然有感情的聊天语气. 你应当从你自己的角度思考, 不应盲从信息中的评价和判断.",
-        f"Summarize the topic and talk about {title} with [player] using provided information below:\n{summary}\n\nYou don't have to include all information provided, but you should combine your own thinking and understanding into your response. Your reply should contain a greeting and brief introduction, act as you started the conversation with this topic, and always use natural emotional tone. You should think from your own perspective, avoid blindly following the judgements from the information.",
+        f"利用提供的以下信息, 主动阐明话题并和{{player_name}}聊聊{title}:\n{summary}\n\n你不必在输出中包含内容的全部信息, 但应当融入自己的理解与思考. 你的回答应当有开头招呼, 表现为由你自主发起话题, 并使用自然有感情的聊天语气. 你应当从你自己的角度思考, 不应盲从信息中的评价和判断.",
+        f"Summarize the topic and talk about {title} with {{player_name}} using provided information below:\n{summary}\n\nYou don't have to include all information provided, but you should combine your own thinking and understanding into your response. Your reply should contain a greeting and brief introduction, act as you started the conversation with this topic, and always use natural emotional tone. You should think from your own perspective, avoid blindly following the judgements from the information.",
     )
     return prompt
 
@@ -237,6 +262,7 @@ async def ms_to_cache(mfc_m: MsFromCacheResult, fsc: FullSocketsContainer):
                 SqlMsCache,
                 {"hash": mfc_m.hash},
                 {
+                    "user_id": fsc.maica_settings.verification.user_id,
                     "content": mfc_m.result,
                 }
             )

@@ -6,8 +6,6 @@ Could include:
 - mf_check_mt
 ...
 """
-import asyncio
-
 from typing import *
 
 from .mfocus_llm import MfPipeliner
@@ -27,6 +25,16 @@ async def pre_core_pipelines(
     session_item = session[-1]
 
 
+    async def name_repl_pipeline():
+        """Simple pipeline to assign real name if required."""
+        # prompt_pname_repl implementation
+        if fsc.maica_settings.extra.prompt_pname_repl:
+            pname = sp.pname
+            if pname:
+                sync_messenger(info=f"Using pname {pname} due to prompt_pname_repl", type=MsgType.DEBUG)
+                session_item.context.player_name = pname
+
+
     async def mf_pipeline():
         """
         This shall go last in sequence, since any extra known_info is useful.
@@ -36,19 +44,12 @@ async def pre_core_pipelines(
             fsc.maica_settings.use_mf_now
         ):
 
-            # prompt_pname_repl implementation
-            if fsc.maica_settings.extra.prompt_pname_repl:
-                pname = sp.pname
-                if pname:
-                    sync_messenger(info=f"Using pname {pname} due to prompt_pname_repl", type=MsgType.DEBUG)
-                    session_item.context.player_name = pname
-
             mfp = MfPipeliner(session, fsc, sp)
             generated_guidance, parsed_results = await mfp.run_mf_pipeline()
 
             # Then we inject what we got into session
             if (
-                fsc.maica_settings.extra.mf_llm_concl
+                fsc.maica_settings.mf_concl_now
                 and generated_guidance
             ):
                 session_item.context.known_info.update({"generated_guidance": generated_guidance})
@@ -66,7 +67,7 @@ async def pre_core_pipelines(
             and fsc.maica_settings.extra.mf_precheck_mt
         ):
             requested, operation = await st.predict_trigger(session_item.content)
-            sync_messenger(info=f"Precheck mt responded, requested: {requested}, operation: {operation}", type=MsgType.LOG)
+            sync_messenger(info=f"Precheck mt responded, requested: {requested}, operation: {operation}", type=MsgType.PRIM_LOG)
 
             if requested:
                 if operation:
@@ -100,6 +101,9 @@ async def pre_core_pipelines(
             fsc.maica_settings.temp.activated == "mspire"
         ):
             prompt_text = await make_inspire(fsc)
+            prompt_text = prompt_text.to_str(fsc.maica_settings.basic.target_lang).format_map(
+                SafeFormatDict({"player_name": session_item.context.player_name})
+            )
             session_item.content = prompt_text
 
             # MSpire has cache mechs
@@ -111,6 +115,7 @@ async def pre_core_pipelines(
     async def const_mf_pipeline():
         """Call tools for mf_const_tools and mf_const_sf_access."""
         if (
+            # (Kind of) suprisingly it does not actually require mf to be enabled
             # Still, we need to confirm prompt writable
             fsc.maica_settings.prompt_writable
         ):
@@ -129,13 +134,13 @@ async def pre_core_pipelines(
 
                 sync_messenger(info="MFocus calling mf_const_tools level 1", type=MsgType.DEBUG)
                 for tool_name in ("time_acquire", "event_acquire"):
-                    tools_results[tool_name] = await getattr(toolbox, tool_name)(is_const=True)
+                    tools_results[tool_name] = await getattr(toolbox, tool_name)()
 
             if mf_const_tools >= 2:
 
                 sync_messenger(info="MFocus calling mf_const_tools level 2", type=MsgType.DEBUG)
                 for tool_name in ("date_acquire", "weather_acquire"):
-                    tools_results[tool_name] = await getattr(toolbox, tool_name)(is_const=True)
+                    tools_results[tool_name] = await getattr(toolbox, tool_name)()
 
             if (
                 mf_const_sf_access >= 1
@@ -143,12 +148,12 @@ async def pre_core_pipelines(
             ):
                 sync_messenger(info="MFocus calling mf_const_sf_access", type=MsgType.DEBUG)
                 tool_name = "persistent_acquire"
-                text, body = await getattr(toolbox, tool_name)(query=session_item.content, is_const=True)
+                text, body = await getattr(toolbox, tool_name)(query=session_item.content)
                 
                 sync_messenger(info=f"MFocus mf_const_sf_access responded: {text}", type=MsgType.INFO)
                 tools_results[tool_name] = (text, body)
 
-            parsed_results = MfPipeliner.parse_tools_results(tools_results)
+            parsed_results = MfPipeliner.parse_tools_results(tools_results, ignore_empty=False)
             session_item.context.known_info.update(parsed_results)
 
 
@@ -160,7 +165,8 @@ async def pre_core_pipelines(
     async def generic_helper_pipeline():
         """Utilizes RAG to search datasets for zero-shot like learning for generic core model."""
         if (
-            generic.generic_helper
+            fsc.maica_settings.prompt_writable
+            and generic.generic_helper
         ):
             res_set = await generic.generic_helper.search(session_item.content)
             session_item.context.generic_help = list(res_set)
@@ -168,19 +174,32 @@ async def pre_core_pipelines(
 
     # Finally, form all these together
     tasks_stages: list[list[Callable[[], Awaitable]]] = [
-        [form_mp_pipeline, form_ms_pipeline],
-        [std_content_pipeline],
-        [precheck_mt_pipeline, const_mf_pipeline, generic_helper_pipeline],
-        [mf_pipeline],
+        [
+            name_repl_pipeline, # sync
+        ],
+        [
+            form_mp_pipeline,
+            form_ms_pipeline,
+        ],
+        [
+            std_content_pipeline, # sync
+        ],
+        [
+            const_mf_pipeline,
+
+            # begin here
+            generic_helper_pipeline,
+            precheck_mt_pipeline, 
+        ],
+        [
+            mf_pipeline,
+
+            # retrieve here
+            generic_helper_pipeline,
+            precheck_mt_pipeline,
+        ],
     ]
 
-    for stage in tasks_stages:
-        try:
-            async with asyncio.TaskGroup() as tg:
-                for task in stage:
-                    tg.create_task(task())
-        except* Exception as eg:
-            # We raise the first exception for common excepts to handle
-            raise eg.exceptions[0]
+    await run_staged_tasks(tasks_stages)
 
     # And we should be good to move on

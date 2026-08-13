@@ -17,11 +17,12 @@ from sqlalchemy.orm import load_only
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from typing import *
-from pydantic import BaseModel, RootModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, RootModel, EmailStr, Field, field_validator, model_validator
 from .encryption_utils import crypto_object, decrypt_token, encrypt_token
 from .maica_utils import *
 from .database_utils import *
 from .database_models import *
+from .terms_utils import check_terms_acceptance, parse_tos_ids
 from .gvars import online_dict, online_dict_guard
 
 _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"maica-invalid-credential", bcrypt.gensalt())
@@ -46,6 +47,13 @@ class FscUsersFuncMixin():
         email: Optional[EmailStr] = Field(default=None, max_length=150)
         password: str = Field(min_length=1, max_length=72)
         type: Optional[Literal["username", "email"]] = None
+
+        @field_validator("password")
+        @classmethod
+        def validate_bcrypt_length(cls, value: str):
+            if len(value.encode("utf-8")) > 72:
+                raise ValueError("Password cannot exceed 72 UTF-8 bytes")
+            return value
         
         @property
         def identity(self):
@@ -152,7 +160,7 @@ class FscUsersFuncMixin():
                     ),
                     type=MsgType.WARN,
                 )
-                raise MaicaInputWarning("Failed parsing access_token") from exc
+                raise MaicaInputWarning("Failed parsing access_token", status="maica_login_token_corrupted") from exc
 
             sync_messenger(
                 info=(
@@ -180,7 +188,7 @@ class FscUsersFuncMixin():
                         info=f"Authentication token={token_ref} failed: account was not found",
                         type=MsgType.WARN,
                     )
-                    raise MaicaPermissionWarning("Invalid username/email or password")
+                    raise MaicaPermissionWarning("Invalid username/email or password", status="maica_login_token_invalid")
 
             user_id = obj.id
             username = obj.username
@@ -214,7 +222,7 @@ class FscUsersFuncMixin():
                     if f2b_until > curr_timestamp:
 
                         f2b_display = datetime.datetime.fromtimestamp(f2b_until).isoformat()
-                        raise MaicaPermissionWarning(f"Fail2Ban interventing until {f2b_display}")
+                        raise MaicaPermissionWarning(f"Fail2Ban interventing until {f2b_display}", status="maica_login_f2b")
                     
                     # Then password verification
                     user_pwd_encoded = token_cridential.password.encode()
@@ -247,7 +255,7 @@ class FscUsersFuncMixin():
                     info=f"Authentication token={token_ref} failed: password mismatch for user_id={user_id}",
                     type=MsgType.WARN,
                 )
-                raise MaicaPermissionWarning("Invalid username/email or password")
+                raise MaicaPermissionWarning("Invalid username/email or password", status="maica_login_token_invalid")
             
         # If running common check, we assert logged in already
         else:
@@ -280,11 +288,25 @@ class FscUsersFuncMixin():
                 suspended_until
                 and suspended_until > time_now
             ):
-                raise MaicaPermissionWarning(f"User banned until {suspended_until.isoformat()}")
+                raise MaicaPermissionWarning(f"User banned until {suspended_until.isoformat()}", status="maica_login_banned")
 
             # Check if email verified here
             if not is_email_confirmed:
-                raise MaicaPermissionWarning("Email not verified, check your inbox")
+                raise MaicaPermissionWarning("Email not verified, check your inbox", status="maica_login_email_unchecked")
+
+            # Check ToS check status here.
+            try:
+                tos_ids = parse_tos_ids(G.A.TOS_IDS)
+            except ValueError as exc:
+                raise CriticalMaicaError(str(exc)) from exc
+            if tos_ids:
+                async with DatabaseUtils.SessionAuth() as aus:
+                    unaccepted = await check_terms_acceptance(aus, user_id, tos_ids)
+                if unaccepted:
+                    raise MaicaPermissionWarning(
+                        "Latest ToS not accepted, check forum",
+                        status="maica_login_tos_unaccepted",
+                    )
 
         # Only assign these if not common check
         if service_only or crid_b64:
@@ -306,7 +328,7 @@ class FscUsersFuncMixin():
             if self.rsc.websocket:
                 connection_lock = self.rsc.session_lock
                 if connection_lock is None:
-                    raise MaicaConnectionWarning("WebSocket session lock is missing")
+                    raise CriticalMaicaError("WebSocket session lock is missing")
 
                 async with online_dict_guard:
                     stale_entry = online_dict.get(user_id)

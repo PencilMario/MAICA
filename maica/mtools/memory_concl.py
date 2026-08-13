@@ -10,6 +10,9 @@ _Bt = BilingualText
 
 async def memory_concl(arc_session: MaicaSession, fsc: FullSocketsContainer):
     """Concludes session to be archived. Pretty experimental."""
+    if not len(arc_session) > 1:
+        raise MaicaInputError("Equivilantly empty session to conclude")
+
     sync_messenger(info="Concluding session content...", type=MsgType.DEBUG)
     session = MaicaSession()
     target_lang = fsc.maica_settings.basic.target_lang
@@ -18,7 +21,8 @@ async def memory_concl(arc_session: MaicaSession, fsc: FullSocketsContainer):
     
     messages_j = arc_session.utilize(
         text_only=True,
-    ).pop(0)
+    )
+    messages_j.pop(0)
     prior_memory = arc_session[0].context.memory_concl
 
     query = "\n".join(
@@ -30,7 +34,7 @@ async def memory_concl(arc_session: MaicaSession, fsc: FullSocketsContainer):
     if prior_memory:
         query = prior_memory + "\n" + query
 
-    class MemoryConclusionResult(BaseModel):
+    class MemoryConclusionResult(GenCorrectionModel):
         conclusion: Optional[str] = Field(
             description="你的总结, 一般应在300字以内." if target_lang == 'zh' else "Your conclusion, normally below 150 words."
         )
@@ -69,13 +73,7 @@ If the conversation lacks content to conclude finally, you can output null.\
             manual_prompt=True,
             ignore_additions=True,
         ),
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "strict": True,
-                "schema": MemoryConclusionResult.model_json_schema(),
-            }
-        },
+        "text": pyd_to_openai(MemoryConclusionResult)
     }
 
     resp = await conn.make_completion(**completion_args)
@@ -86,6 +84,9 @@ If the conversation lacks content to conclude finally, you can output null.\
     # If session has an earlier conclusion but newer emits null, we reuse it
     if prior_memory and not conclusion:
         conclusion = prior_memory
+
+    # Name replacing
+    conclusion = conclusion.replace("[player]", "{player_name}")
 
     sync_messenger(info=f"Finished processing memory_concl to session. Conclusion: {conclusion}", type=MsgType.PRIM_LOG)
     return conclusion

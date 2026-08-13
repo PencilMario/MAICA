@@ -9,11 +9,9 @@ import orjson
 import datetime
 
 from typing import *
-from math import ceil
 from pydantic import BaseModel, RootModel, Field, TypeAdapter, create_model
 from random import sample
 from dateutil.relativedelta import relativedelta
-from dataclasses import dataclass
 from .maica_utils import *
 from .agent_tools import *
 
@@ -29,18 +27,28 @@ class SessionPersistentMixin():
     content: dict
     content_temp: dict
 
-    def read_key(self, key):
+    def read_key(self, key, where: Literal['all', 'pers', 'temp'] = 'all'):
         def _read_perm(key):
-            if self.fsc.maica_settings.basic.savefile_access:
+            if (
+                self.fsc.maica_settings.basic.savefile_access
+                and where != 'temp'
+            ):
                 return self.content.get(key)
             else:
                 return None
-            
-        if key in self.content_temp:
-            v = self.content_temp[key]
-            if isinstance(v, list) and key == "mas_player_additions":
-                v = v + (_read_perm(key) or [])
-        else:
+
+        v = None
+        # Try getting from temp first
+        if where != 'pers':
+            if key in self.content_temp:
+                v = self.content_temp[key]
+
+        # Specifically handling additions
+        if key == "mas_player_additions":
+            v = v or []
+            v += (_read_perm(key) or [])
+
+        elif v is None:
             v = _read_perm(key)
             
         return v
@@ -60,7 +68,7 @@ class SessionPersistentMixin():
         """Just an alias."""
         return self.read_key("mas_affection")
 
-    def _conclude_basic_sf(self):
+    def _conclude_basic_sf(self, where: Literal['all', 'pers', 'temp'] = 'all'):
         result: List[_Bt] = []
 
         def _ap(zh, en):
@@ -72,7 +80,7 @@ class SessionPersistentMixin():
             )
 
         def _rf(key):
-            return self.read_key(key)
+            return self.read_key(key, where)
             
         def parse_date(dt: datetime.date):
             """Datetime."""
@@ -254,42 +262,47 @@ class SessionPersistentMixin():
         data1 = _rf('_mas_pm_would_come_to_spaceroom')
         if data1:
             _ap('{player_name}希望来到太空教室和莫妮卡在一起.', "{player_name} would like to cross over to be together with Monika.")
+
+        # Holidays
         
         data1 = _rf('_mas_o31_tt_count')
         if data1:
             _ap('莫妮卡与{player_name}一起过了万圣节, 并要到了糖果.', "Monika and {player_name} have gone trick-or-treating on Halloween.")
-        elif data1 is False:
+        elif not data1 and data1 is not None:
             _ap('莫妮卡和{player_name}还没有在万圣节要过糖果.', "Monika and {player_name} haven't gone trick-or-treating on Halloween yet.")
         
         data1 = _rf('_mas_d25_spent_d25')
         if data1:
             _ap('莫妮卡与{player_name}一起过了圣诞节.', "Monika and {player_name} have spent Christmas together.")
-        elif data1 is False:
+        else:
             _ap('莫妮卡和{player_name}还没有一起过圣诞节.', "Monika and {player_name} haven't spent Christmas together yet.")
         
         data1 = _rf('_mas_nye_spent_nye')
-        if data1:
+        data2 = _rf('_mas_nye_spent_nyd')
+        if any((data1, data2)):
             _ap('莫妮卡与{player_name}一起过了新年.', "Monika and {player_name} have spent New Year's Eve together.")
-        elif data1 is False:
+        else:
             _ap('莫妮卡和{player_name}还没有一起过新年.', "Monika and {player_name} haven't spent New Year's Eve together yet.")
         
         data1 = _rf('_mas_player_bday_spent_time')
         if data1:
             _ap('莫妮卡给{player_name}庆祝过生日.', "Monika has celebrated {player_name}'s birthday.")
-        elif data1 is False:
+        else:
             _ap('莫妮卡还没有庆祝过{player_name}的生日.', "Monika hasn't celebrated {player_name}'s birthday yet.")
         
         data1 = _rf('_mas_f14_spent_f14')
         if data1:
             _ap('莫妮卡与{player_name}一起过了情人节.', "Monika and {player_name} have spent Valentine's day together.")
-        elif data1 is False:
+        else:
             _ap('莫妮卡和{player_name}还没有一起过情人节.', "Monika and {player_name} haven't spent Valentine's day together yet.")
         
         data1 = _rf('_mas_bday_said_happybday')
         if data1:
             _ap('{player_name}庆祝过莫妮卡的生日.', "{player_name} has celebrated Monika's birthday.")
-        elif data1 is False:
+        else:
             _ap('{player_name}还没有给莫妮卡庆过生.', "{player_name} hasn't celebrated Monika's birthday yet.")
+
+        # Holidays end
         
         data1 = _rf('_mas_pm_religious')
         if data1:
@@ -916,8 +929,8 @@ class SessionPersistentMixin():
 
         return result or []
 
-    def _conclude_extra_sf(self):
-        result: List[str] = self.read_key('mas_player_additions')
+    def _conclude_extra_sf(self, where: Literal['all', 'pers', 'temp'] = 'all'):
+        result: List[str] = self.read_key('mas_player_additions', where)
 
         if result is None:
             return []
@@ -929,11 +942,12 @@ class SessionPersistentMixin():
         
         return result or []
 
-    def form_info(self) -> Set:
+    def form_info(self, where: Literal['all', 'pers', 'temp'] = 'all') -> Set:
         conclusion = []
-        conclusion.extend(self._conclude_basic_sf())
-        conclusion.extend(self._conclude_suppl_sf())
-        conclusion.extend(self._conclude_extra_sf())
+        conclusion.extend(self._conclude_basic_sf(where))
+        if where != 'temp':
+            conclusion.extend(self._conclude_suppl_sf())
+        conclusion.extend(self._conclude_extra_sf(where))
 
         conclusion_strs = set()
         for i in conclusion:
@@ -948,6 +962,19 @@ class SessionPersistentMixin():
             if len(i.encode()) > 512 * 3:
                 raise MaicaInputWarning("MAICA RAG does not accept length above 1536")
 
+
+def _update_on_duplicate(li: list[dict], unique: str):
+    """The latter objs override formers."""
+    dbu: dict[str, dict] = {}
+    for d in li:
+        if (du := d[unique]) in dbu:
+            dbu[du].update(d)
+        else:
+            dbu[du] = d
+
+    return list(dbu.values())
+
+
 class SessionTriggerMixin():
     """To provide related functions."""
     session_num: int
@@ -957,18 +984,26 @@ class SessionTriggerMixin():
 
     def _get_triggers(self):
         affs = 0
+        mems = 0
         switches = 0
         meters = 0
         booleans = 0
 
-        triggers_dict_list = self.content_temp + self.content
+        triggers_dict_list = self.content + self.content_temp
+        triggers_dict_list = _update_on_duplicate(triggers_dict_list, "name")
 
         for trigger_dict in triggers_dict_list:
             match trigger_dict['template']:
                 case 'common_affection_template':
+                    trigger_dict["name"] = "alter_affection"
                     affs += 1
                     if affs > 1:
                         raise MaicaInputWarning("common_affection_template amount shouldn't > 1")
+                case 'memory_writeback_template':
+                    trigger_dict["name"] = "write_memory"
+                    mems += 1
+                    if mems > 1:
+                        raise MaicaInputWarning("memory_writeback_template amount shouldn't > 1")
                 case 'common_switch_template':
                     switches += 1
                     if switches > 6:

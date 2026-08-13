@@ -6,6 +6,7 @@ If you want to read in English, use a translator.
 + 数据库交互普遍采用sqlalchemy
 
 + 添加与RAG相关的支持
+    > v1.3.000.rc2 的向量引用结构迁移会重建不兼容的 Milvus collection. Milvus 中的 RAG 向量被视为可由客户端启动时重新上传的非持久性缓存; 如需保留该开发版本窗口内的向量, 请在升级前自行备份.
 
 + 更新会话管理到v2
 
@@ -30,7 +31,7 @@ If you want to read in English, use a translator.
 
 + 添加高级设置mf_sf_access_impl
 
-+ 添加高级设置mt_concl_memory
++ 添加高级设置memory_concl_arc
 
 + 现在发送maica_mcore_gen_start标记断点续传介入
 
@@ -109,3 +110,15 @@ If you want to read in English, use a translator.
 - 现在不再允许mt触发器数量超出上限
 
 - 现在savefile和trigger均严格对照session num, 不再采用0作为默认
+
++ 添加了可配置的maica_gnrc功能, 为通用模型补充指导
+
+- 现在临时mf的数量有额外限制, 且对纯rag实现不生效
+
+= 现在mas_player_additions中的玩家名建议使用{player_name}
+
+= 修改了mtrigger返回格式
+
+- 现在common_affection_template trigger不再支持自定义名称
+
++ 新增memory_writeback_template trigger

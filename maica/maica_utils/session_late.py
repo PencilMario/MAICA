@@ -8,6 +8,7 @@ import orjson
 import datetime
 
 from typing import *
+from enum import StrEnum
 from math import ceil
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 from random import sample
@@ -28,26 +29,24 @@ class SessionPersistentLlmMixin():
     content_temp: dict
 
 
-    async def to_vector_store(self, _data: Optional[list] = None):
-        """Synchronize derived retrieval vectors for this session."""
+    async def to_vector(self, _data: Optional[list] = None):
+        """As said, to milvus. Milvus is not considered persistent storage so only write."""
         vector_pool = self.fsc.vector_pool
         if not self.fsc.is_vector_ready:
             return
         user_id = self.fsc.maica_settings.verification.user_id
         session_num = self.session_num
 
-        await vector_pool.sync_texts(
+        await vector_pool.cross_insert(
             embedding_conn=self.fsc.embedding_conn,
             data = _data if _data is not None else self.form_info(),
-            filters={
-                "user_id": user_id,
-                "chat_session_num": session_num,
-            },
+            user_id=user_id,
+            chat_session_num=session_num,
         )
 
 
-    async def filter_vector_store(self, query: str, topk: int = 5) -> Set:
-        """Embed and search a query in the local vector store."""
+    async def filter_milvus(self, query: str, topk: int = 5) -> Set:
+        """Embed and search a query in Milvus."""
         vector_pool = self.fsc.vector_pool
         if not self.fsc.is_vector_ready:
             return []
@@ -55,21 +54,19 @@ class SessionPersistentLlmMixin():
         user_id = self.fsc.maica_settings.verification.user_id
         session_num = self.session_num
 
-        res_set = await vector_pool.search(
+        res_set = await vector_pool.embed_search(
             embedding_conn=self.fsc.embedding_conn,
             data=[query],
-            filters={
-                "user_id": user_id,
-                "chat_session_num": session_num,
-            },
+            user_id=user_id,
+            chat_session_num=session_num,
             topk=topk,
         )
 
         return res_set
 
 
-    async def filter_reranker(self, query: str, documents: Optional[list] = None, topk: int = 2) -> list:
-        """More precisely filter results, suggest using filter_vector_store first."""
+    async def filter_reranker(self, query: str, documents: Optional[set] = None, topk: int = 2) -> list:
+        """More precisely filter results, suggest using filter_milvus first."""
         reranking_conn = self.fsc.reranking_conn
         if not self.fsc.is_reranking_ready:
             return []
@@ -78,7 +75,10 @@ class SessionPersistentLlmMixin():
             documents is None
             and self.fsc.is_vector_ready
         ):
-            documents = await self.filter_vector_store(query, 10)
+            documents = await self.filter_milvus(query, 10)
+            # We include full extras since there's no other way
+            documents |= self.form_info(where='temp')
+
         elif documents is None:
             documents = self.form_info()
 
@@ -95,34 +95,36 @@ class SessionPersistentLlmMixin():
 
         resp = await reranking_conn.make_reranking(**reranking_params)
 
-        cfd_min = 0.6
+        cfd_min = 0.5
         res_list = []
 
         _relevances = []
         for i in resp["results"]:
+            _relevances.append(i["relevance_score"])
             if i["relevance_score"] >= cfd_min:
-                _relevances.append(i["relevance_score"])
                 res_list.append(i["document"]["text"])
 
-        if res_list:
-            sync_messenger(info=f"Reranking found {len(res_list)} results, distance range {min(_relevances)}~{max(_relevances)}", type=MsgType.DEBUG)
-        else:
-            sync_messenger(info="Reranking result is empty", type=MsgType.DEBUG)
+        sync_messenger(info=f"Reranking found {len(_relevances)} results" + (f", distance range {min(_relevances)}~{max(_relevances)}" if _relevances else ""), type=MsgType.DEBUG)
+        sync_messenger(info=f"{len(res_list)} results adopted", type=MsgType.DEBUG)
 
         return res_list
 
 
-    async def filter_llm(self, query: str, documents: Optional[list] = None, topk: int = 3) -> list:
+    async def filter_llm(self, query: str, documents: Optional[set] = None, topk: int = 3) -> list:
         """Traditional MFocus sfe implementation."""
         session = MaicaSession()
         target_lang = self.fsc.maica_settings.basic.target_lang
+        user_id = self.fsc.maica_settings.verification.user_id
+        session_num = self.fsc.maica_settings.temp.chat_session
         conn = self.fsc.mnerve_conn or self.fsc.mfocus_conn
 
         if (
             documents is None
             and self.fsc.is_vector_ready
         ):
-            documents = await self.filter_vector_store(query, 10)
+            documents = await self.filter_milvus(query, 10)
+            documents |= self.form_info(where='temp')
+
         elif documents is None:
             documents = self.form_info()
 
@@ -131,8 +133,19 @@ class SessionPersistentLlmMixin():
         if not documents:
             return []
 
-        class PersSelectionResults(BaseModel):
-            items: list[str] = Field(
+        if TYPE_CHECKING:
+            type DocEnum = str
+        else:
+            DocEnum = StrEnum(
+                f"DocEnum_{user_id}_{session_num}",
+                {
+                    k: k for k
+                    in documents
+                }
+            )
+
+        class PersSelectionResults(GenCorrectionModel):
+            items: list[DocEnum] = Field(
                 min_length=0,
                 max_length=topk,
                 description=f"0到{topk}个最相关的条目, 原样输出." if target_lang == 'zh' else f"0 ~ {topk} most relevant items, output as-is."
@@ -167,13 +180,7 @@ If none of the information is relevant with query, you can output empty.\
                 manual_prompt=True,
                 ignore_additions=True,
             ),
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "strict": True,
-                    "schema": PersSelectionResults.model_json_schema(),
-                }
-            },
+            "text": pyd_to_openai(PersSelectionResults)
         }
 
         resp = await conn.make_completion(**completion_args)
@@ -199,13 +206,10 @@ class SessionTriggerLlmMixin():
         text_l = []
         for tr in self._get_triggers():
             t, _ = tr.to_descr()
+            if t:
+                text_l.append(t)
 
-            text_l.append(t)
-
-        descr_text = _Bt()
-        for t in text_l:
-            descr_text += "\n- "
-            descr_text += t
+        descr_text = list_to_bullets(text_l)
 
         if not descr_text:
             return False, None
@@ -232,13 +236,17 @@ class SessionTriggerLlmMixin():
         #         )
 
         # No that's dumb and costy. We just need to verify a true-or-false, if the query can be satisfied.
-        class TrigSelectionResults(BaseModel):
+        class TrigSelectionResults(GenCorrectionModel):
             requested: bool = Field(
                 description="是否需要使用工具." if target_lang == 'zh' else "If any tool is required."
             )
             operation: Optional[str] = Field(
                 description="你选择的工具, 原样输出." if target_lang == 'zh' else "The tool you choose, output as-is."
             )
+            _default_resp = {
+                "requested": False,
+                "operation": None,
+            }
 
         system = MaicaSessionItem(
             "system",
@@ -277,13 +285,7 @@ Here is the tools list:\
                 manual_prompt=True,
                 ignore_additions=True,
             ),
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "strict": True,
-                    "schema": TrigSelectionResults.model_json_schema(),
-                }
-            },
+            "text": pyd_to_openai(TrigSelectionResults)
         }
 
         resp = await conn.make_completion(**completion_args)

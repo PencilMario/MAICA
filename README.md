@@ -3,9 +3,9 @@
 <img src="https://maica.monika.love/assets/maica-text-finish-p.png" width=150>
 </div>
 
-***
-
 <p align="center">中文 | <a href="/README_EN.md">English</a></p>
+
+***
 
 本页面是MAICA的指引页面, 当前位置是MAICA后端仓库.
 
@@ -13,25 +13,48 @@ MAICA项目的详细介绍页是https://maica.monika.love/.
 
 要快速开始或了解授权, 请参阅https://maica.monika.love/tos.
 
-MAICA的后端仓库地址是https://github.com/Mon1-innovation/MAICA.
-
-MAICA的后端compact分支地址是https://github.com/Mon1-innovation/MAICA_Server_Submod
+***
 
 MAICA的子模组前端仓库地址是https://github.com/Mon1-innovation/MAICA_ChatSubmod.
 
-MAICA LIA分支的模型地址是https://huggingface.co/edgeinfinity/MAICAv0-LIA-72B.
-
-MAICA LOA分支的模型地址是https://huggingface.co/edgeinfinity/MAICAv0-LOA-7B.
-
 MAICA-MTTS的子模组前端仓库地址是https://github.com/Mon1-innovation/MAICA_MttsSubmod.
+
+***
+
+MAICA的后端仓库地址是https://github.com/Mon1-innovation/MAICA.
+
+MAICA的后端compact分支地址是https://github.com/Mon1-innovation/MAICA_Server_Submod.
 
 MAICA-MTTS的仓库地址是https://github.com/Mon1-innovation/MAICA_MTTS.
 
-MAICA-MTTS模型地址是https://huggingface.co/edgeinfinity/MTTSv0-VoiceClone.
+***
 
-MAICA的基本数据集仓库位于https://huggingface.co/datasets/edgeinfinity/MAICA_ds_basis.
+MAICA LOA分支的模型:
+- MAICAv0-LOA6-7B-Instruct: https://huggingface.co/edgeinfinity/MAICAv0-LOA-7B
+
+MAICA LIA分支的模型:
+- MAICAv0-LIA6-72B-Instruct: https://huggingface.co/edgeinfinity/MAICAv0-LIA-72B
+
+MAICA DAA分支的模型:
+- MAICAv1-DAA4L-14B-Instruct: https://huggingface.co/edgeinfinity/MAICAv1-DAA4L-14B-Instruct
+- MAICAv1-DAA4L-14B-Instruct-GGUF: https://huggingface.co/edgeinfinity/MAICAv1-DAA4L-14B-Instruct-GGUF
+- MAICAv0-DAA1-72B-Instruct: 非公开
+- MAICAv0-DAA2-72B-Instruct: 非公开
+- MAICAv1-DAA3-235B-A22B-Instruct: 非公开
+- MAICAv1-DAA4-397B-A17B-Instruct: 非公开
+
+MAICA-MTTS模型:
+- MTTSv0-VoiceClone: https://huggingface.co/edgeinfinity/MTTSv0-VoiceClone
+- MTTSv1-VoiceClone: https://huggingface.co/edgeinfinity/MTTSv1-VoiceClone
+
+MAICA的基本数据集仓库: 
+- https://huggingface.co/datasets/edgeinfinity/MAICA_ds_basis
+
+***
 
 MAICA的相关文档存储于https://github.com/Mon1-innovation/MAICA/tree/main/document.
+
+***
 
 > Anything below this point is written by AI.
 
@@ -60,4 +83,4 @@ python -m ruff check maica tests examples
 
 ## 部署安全
 
-公开实例应在反向代理上启用 TLS；HTTP 鉴权优先使用 `Authorization: Bearer <access_token>`，避免把令牌写入 URL。请保管 `maica/keys/prv.key`，为 NVWatcher 配置 SSH host key，并通过 `MAICA_VISION_HOST_ALLOWLIST` 限制可发送给视觉模型的图片域名。
+公开实例应在反向代理上启用 TLS；HTTP 鉴权优先使用 `Authorization: Bearer <access_token>`，避免把令牌写入 URL。请保管 `maica/keys/prv.key`，为 NVWatcher 配置 SSH host key，并通过 `MAICA_MVISTA_TRUSTED` 的主机/IP/CIDR 规则限制视觉模型的图片来源。

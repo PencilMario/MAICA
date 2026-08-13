@@ -25,6 +25,7 @@ _CONNS_LIST = [
 
 _Bt = BilingualText
 
+
 class WsCoroutine(NoWsCoroutine):
     """
     Force ws existence.
@@ -45,7 +46,11 @@ class WsCoroutine(NoWsCoroutine):
 
         # The ip part
         websocket = self.fsc.websocket
-        xff = websocket.request.headers.get("X-Forwarded-For")
+        xff = (
+            websocket.request.headers.get("X-Forwarded-For")
+            if int(G.A.TRUST_XFF)
+            else None
+        )
         if xff:
             self.remote_addr = xff.split(',')[0].strip()
         else:
@@ -66,12 +71,13 @@ class WsCoroutine(NoWsCoroutine):
                 recv_text = await websocket.recv()
                 # Validate text
                 try:
-                    ws_config: UnionStage1Settings = TypeAdapter(Stage1Settings).validate_json(recv_text)
+                    ws_config: Stage1Settings = TypeAdapter(Stage1Settings).validate_json(recv_text)
+                    if ws_config.type != "sping":
+                        sync_messenger(info='Recieved request on stage1', type=MsgType.DEBUG)
                 except Exception as e:
                     # We can test if it's caused by wrong stage
                     try:
-                        sync_messenger(info='Recieved request on stage1', type=MsgType.DEBUG)
-                        _ws_config: UnionStage2Settings = TypeAdapter(Stage2Settings).validate_json(recv_text)
+                        _ws_config: Stage2Settings = TypeAdapter(Stage2Settings).validate_json(recv_text)
                     except Exception:
                         raise MaicaInputWarning(f"Query parsing failed: {str(e)}") from e
                     raise MaicaPermissionWarning(f"Query type {_ws_config.type} not allowed pre-auth")
@@ -149,12 +155,13 @@ class WsCoroutine(NoWsCoroutine):
                 # Then we examine the input
                 recv_text = await websocket.recv()
                 try:
-                    sync_messenger(info='Recieved request on stage2', type=MsgType.DEBUG)
-                    ws_config: UnionStage2Settings = TypeAdapter(Stage2Settings).validate_json(recv_text)
+                    ws_config: Stage2Settings = TypeAdapter(Stage2Settings).validate_json(recv_text)
+                    if ws_config.type != "sping":
+                        sync_messenger(info='Recieved request on stage2', type=MsgType.DEBUG)
                 except Exception as e:
                     # We can test if it's caused by wrong stage
                     try:
-                        _ws_config: UnionStage1Settings = TypeAdapter(Stage1Settings).validate_json(recv_text)
+                        _ws_config: Stage1Settings = TypeAdapter(Stage1Settings).validate_json(recv_text)
                     except Exception:
                         raise MaicaInputWarning(f"Query parsing failed: {str(e)}") from e
                     raise MaicaPermissionWarning(f"Query type {_ws_config.type} not allowed post-auth")
@@ -218,6 +225,8 @@ class WsCoroutine(NoWsCoroutine):
     # Completion section
     async def generate_response(self, ws_config: WsQueryConfig):
 
+        await ws_config.validate_vision_hosts()
+
         # Initiations
         chat_session = self.settings.temp.chat_session = ws_config.chat_session
 
@@ -242,7 +251,7 @@ class WsCoroutine(NoWsCoroutine):
             if ws_config.reset:
                 concl = None
                 # Conclude memory if required first
-                if self.settings.extra.mt_concl_memory >= 2:
+                if self.settings.extra.memory_concl_arc >= 2:
                     # Means we should conclude memory on reset
                     concl = await mtools.memory_concl(session, self.fsc)
 
@@ -284,7 +293,9 @@ class WsCoroutine(NoWsCoroutine):
                     self.settings.temp.activated = "mspire"
                     self.settings.temp.mspire.update(ws_config.inspire)
                     self.settings.temp.common.update(ws_config.inspire)
-                    str_query = ", ".join(ws_config.inspire.title)
+                    str_query = ", ".join(
+                        [to_str(i, self.settings.basic.target_lang) for i in ws_config.inspire.title]
+                    )
 
                 case "mpostal":
                     self.settings.temp.activated = "mpostal"
@@ -294,9 +305,11 @@ class WsCoroutine(NoWsCoroutine):
 
             # Acquire procedure already clears temp, so write here directly
             if ws_config.savefile:
-                sp.content_temp = ws_config.savefile
+                sp.content_temp = ws_config.savefile.root
+                sp.validate()
             if ws_config.triggers:
-                st.content_temp = ws_config.triggers
+                st.content_temp = ws_config.triggers.root
+                st.validate()
 
             # MVista
             if ws_config.vision:
@@ -393,11 +406,14 @@ class WsCoroutine(NoWsCoroutine):
                 reply_joined = ''
                 seq = 0
 
-                async def send_delta(delta):
+                async def send_delta(delta: str):
                     nonlocal reply_joined, seq
-                    await self.fsc.messenger('maica_core_streaming_continue', delta, 100)
                     reply_joined += delta
-                    seq += 1
+
+                    if striped_delta := delta.lstrip():
+                        # Only lstrip for sending, so the data we save is intact
+                        await self.fsc.messenger('maica_core_streaming_continue', striped_delta, 100)
+                        seq += 1
 
                 # If not skipping generation, we generate it ofc
                 if not self.settings.skip_generation:
@@ -491,12 +507,12 @@ async def main_logic(
                 no_print=True,
             )
 
-            thread_instance = await WsCoroutine.async_create(
+            coro_instance = await WsCoroutine.async_create(
                 fsc,
             )
 
             # This is stage 1
-            permit = await thread_instance.check_permit()
+            permit = await _wait_for_permit(coro_instance)
             if not permit.get('id'):
                 raise MaicaPermissionError(f"Authentication returned no user id: {permit}")
 
@@ -504,7 +520,7 @@ async def main_logic(
             sync_messenger(info=f"Locking session for {permit['id']} named {permit['username']}", type=MsgType.LOG)
 
             # Runs until break
-            await thread_instance.function_switch()
+            await coro_instance.function_switch()
         
         except CommonMaicaException as ce:
 
@@ -524,11 +540,11 @@ async def main_logic(
 
             # We should catch and convert all expected issues in procedure
             # So unconverted exceptions are treated as errors
-            traceback.print_exc()
             await fsc.messenger(
                 'maica_uncaught_exception',
-                f'Coroutine broke by an unknown exception: {str(e)}',
-                500,
+                'Coroutine broke by an unknown exception: ',
+                error=e,
+                code=500,
             )
 
         # Cleanups
@@ -561,6 +577,19 @@ async def main_logic(
 # ====================================================== Task starter ======================================================
 
 
+async def _wait_for_permit(coro_instance):
+    try:
+        return await asyncio.wait_for(
+            coro_instance.check_permit(),
+            timeout=float(G.A.AUTH_TIMEOUT),
+        )
+    except TimeoutError as exc:
+        raise MaicaPermissionWarning(
+            "Authentication timed out",
+            408,
+        ) from exc
+
+
 async def prepare_thread(**kwargs):
 
     # Construct csc first
@@ -574,7 +603,7 @@ async def prepare_thread(**kwargs):
 
     try:
         models_info = "\n\n"
-        models_info += f"Main model: {root_csc.mcore_conn.model_actual}\n"
+        models_info += f"Main model: {root_csc.mcore_conn.model_actual} ({'zero-shot' if G.A.MCORE_GENERIC and int(G.A.MCORE_GENERIC) else 'trained'})\n"
         models_info += f"MFocus model: {root_csc.mfocus_conn.model_actual}\n"
 
         if root_csc.mvista_conn:
@@ -607,6 +636,10 @@ async def prepare_thread(**kwargs):
         else:
             models_info += "Reranking model: Disabled\n"
 
+        models_info += "\n"
+        models_info += f"Vector searching function set enabled: {root_csc.is_vector_ready}\n"
+        models_info += f"Reranking function set enabled: {root_csc.is_reranking_ready}\n"
+
         sync_messenger(info=models_info, type=MsgType.PRIM_LOG)
 
     except Exception as e:
@@ -614,7 +647,7 @@ async def prepare_thread(**kwargs):
         sync_messenger(info=f"Major model deployment cannot be reached: {str(e)}, running in minimal testing mode", type=MsgType.SYS)
 
     # Generic model helper init here
-    if int(G.A.MCORE_GENERIC):
+    if G.A.MCORE_GENERIC and int(G.A.MCORE_GENERIC):
         try:
             mtools.generic.generic_helper = await mtools.GenericModelHelper.async_create(csc=root_csc)
         except Exception as e:
@@ -643,8 +676,7 @@ async def prepare_thread(**kwargs):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        error = CommonMaicaError(str(e), '504')
-        sync_messenger(error=error)
+        sync_messenger(info="Uncaught error happened in ws: ", code=504, error=e)
         raise
 
     finally:

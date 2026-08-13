@@ -1,6 +1,7 @@
 
 from .maica_utils import (
     silent,
+    TargetLangType,
     MsgType,
     FakeChatCompletion,
     CommonMaicaException,
@@ -16,6 +17,7 @@ from .maica_utils import (
     MaicaDbWarning,
     MaicaConnectionWarning,
     MaicaInternetWarning,
+    MaicaResponseWarning,
     AsyncCreator,
     LimitedList,
     LoginResult,
@@ -28,6 +30,7 @@ from .maica_utils import (
     uscore_words_upper,
     mstuff_words_upper,
     sleep_forever,
+    run_staged_tasks,
     alt_tools,
     clean_msgs,
     maica_assert,
@@ -35,6 +38,8 @@ from .maica_utils import (
     has_words_in,
     is_word_start,
     proceed_common_text,
+    list_to_bullets,
+    pyd_to_openai,
     sync_messenger,
     messenger,
     load_env,
@@ -68,6 +73,7 @@ from .maica_utils import (
     PydSoftResetMixin,
     RobustList,
     SafeFormatDict,
+    GenCorrectionModel,
     DummyClass,
 )
 from .connection_utils import ConnUtils, AiConnectionManager
@@ -81,17 +87,19 @@ from .locater import locater, get_inner_path, get_outer_path
 from .gvars import online_dict, G
 from .chat_session import MaicaSession, MaicaSessionItem
 from .db_bound_obj import DbBoundObject
-from .agent_tools import WrappedOpenAIToolProperty, WrappedOpenAITool, WrappedOpenAIToolNamespace, BaseTrigger, AffectionTrigger, SwitchTrigger, MeterTrigger, BooleanTrigger, TypeTrigger
+from .agent_tools import WrappedOpenAIToolProperty, WrappedOpenAITool, WrappedOpenAIToolNamespace, NativeOpenAITool, BaseTrigger, AffectionTrigger, SwitchTrigger, MeterTrigger, BooleanTrigger, TypeTrigger
 from .llm_utils import ToolCall, llm_request
 from .stream_buffer import StreamBuffer, no_lock_acquire_buffer, acquire_buffer, buffers_gc
-from .ws_config import WsPermissionConfig, WsPingConfig, WsSPingConfig, WsReconnConfig, WsSettingsConfig, WsQueryConfig, UnionStage1Settings, UnionStage2Settings, Stage1Settings, Stage2Settings
+from .ws_config import WsPermissionConfig, WsPingConfig, WsSPingConfig, WsReconnConfig, WsSettingsConfig, WsQueryConfig, Stage1Settings, Stage2Settings
 from .database_utils import DatabaseUtils, dispose_database_engines, sqla_get_or_create, sqla_create_or_update
-from .database_models import SqlBaseAuth, SqlBaseData, SqlUser, SqlAccountStatus, SqlChatSession, SqlCropArchived, SqlCsessionArchived, SqlMsCache, SqlMvMeta, SqlPersistent, SqlTrigger
+from .database_models import SqlBaseAuth, SqlBaseData, SqlUser, SqlAccountStatus, SqlChatSession, SqlCropArchived, SqlCsessionArchived, SqlMsCache, SqlMvMeta, SqlPersistent, SqlTrigger, SqlVectorReference
+from .terms_utils import check_terms_acceptance, parse_tos_ids
 from .users_utils import FscUsersFuncMixin
 from .session_mgr import SessionPersistent, SessionTrigger, acquire_dbo, acquire_session, dbos_gc
 
 __all__ = [
     'silent',
+    'TargetLangType',
     'MsgType',
     'FakeChatCompletion',
     'CommonMaicaException',
@@ -107,6 +115,7 @@ __all__ = [
     'MaicaDbWarning',
     'MaicaConnectionWarning',
     'MaicaInternetWarning',
+    'MaicaResponseWarning',
     'AsyncCreator',
     'LimitedList',
     'LoginResult',
@@ -121,6 +130,7 @@ __all__ = [
     'uscore_words_upper',
     'mstuff_words_upper',
     'sleep_forever',
+    'run_staged_tasks',
     'alt_tools',
     'clean_msgs',
     'maica_assert',
@@ -128,6 +138,8 @@ __all__ = [
     'has_words_in',
     'is_word_start',
     'proceed_common_text',
+    'list_to_bullets',
+    'pyd_to_openai',
     'sync_messenger',
     'messenger',
     'load_env',
@@ -161,6 +173,7 @@ __all__ = [
     'PydSoftResetMixin',
     'RobustList',
     'SafeFormatDict',
+    'GenCorrectionModel',
     'DummyClass',
     'LanceVectorStore',
     'ConnUtils',
@@ -191,6 +204,7 @@ __all__ = [
     'WrappedOpenAIToolProperty',
     'WrappedOpenAITool',
     'WrappedOpenAIToolNamespace',
+    'NativeOpenAITool',
     'BaseTrigger',
     'AffectionTrigger',
     'SwitchTrigger',
@@ -203,9 +217,10 @@ __all__ = [
     'no_lock_acquire_buffer',
     'acquire_buffer',
     'buffers_gc',
-    'WsPermissionConfig', 'WsPingConfig', 'WsSPingConfig', 'WsReconnConfig', 'WsSettingsConfig', 'WsQueryConfig', 'UnionStage1Settings', 'UnionStage2Settings', 'Stage1Settings', 'Stage2Settings',
+    'WsPermissionConfig', 'WsPingConfig', 'WsSPingConfig', 'WsReconnConfig', 'WsSettingsConfig', 'WsQueryConfig', 'Stage1Settings', 'Stage2Settings',
     'SqlBaseAuth', 'SqlBaseData', 'DatabaseUtils', 'dispose_database_engines', 'sqla_get_or_create', 'sqla_create_or_update',
-    'SqlUser', 'SqlAccountStatus', 'SqlChatSession', 'SqlCropArchived', 'SqlCsessionArchived', 'SqlMsCache', 'SqlMvMeta', 'SqlPersistent', 'SqlTrigger',
+    'SqlUser', 'SqlAccountStatus', 'SqlChatSession', 'SqlCropArchived', 'SqlCsessionArchived', 'SqlMsCache', 'SqlMvMeta', 'SqlPersistent', 'SqlTrigger', 'SqlVectorReference',
+    'check_terms_acceptance', 'parse_tos_ids',
     'FscUsersFuncMixin',
 ]
 

@@ -84,13 +84,14 @@ class DbBoundObject(CheckDestroyed):
         else:
             item = item.strip()
             if not item:
-                raise MaicaInputWarning("Cannot load empty serialized data")
-            if item[0] not in ('[', '{'):
-                item = f"[{item}]"
-            self.content = orjson.loads(item)
+                self.content = self._empty()
+            else:
+                if item[0] not in ('[', '{'):
+                    item = f"[{item}]"
+                self.content = orjson.loads(item)
             self.text = item
 
-    def _post_upload(self, *args, **kwargs):
+    def validate(self, *args, **kwargs):
         """For post-upload checks. Override it."""
         ...
 
@@ -141,7 +142,7 @@ class DbBoundObject(CheckDestroyed):
         else:
             # So, we run post_upload checks here
             try:
-                self._post_upload()
+                self.validate()
             except CommonMaicaException:
                 self.clear()
                 raise

@@ -1,6 +1,9 @@
 """Import layer 2.1"""
 
+import asyncio
 import orjson
+import ipaddress
+import socket
 from urllib.parse import urlsplit
 
 from typing import *
@@ -10,6 +13,98 @@ from .setting_utils import MaicaSettings
 from .maica_utils import *
 
 _Bt = BilingualText
+
+
+def _parse_vision_host_rules(raw_rules: str):
+    denied_hosts: set[str] = set()
+    allowed_hosts: set[str] = set()
+    denied_networks = []
+    allowed_networks = []
+    deny_unmarked = False
+
+    for raw_rule in (raw_rules or "").split(","):
+        raw_rule = raw_rule.strip()
+        if not raw_rule:
+            continue
+        denied = raw_rule.startswith("!")
+        rule = raw_rule[1:].strip() if denied else raw_rule
+        if not rule:
+            raise ValueError("MAICA_MVISTA_TRUSTED contains an empty negated rule")
+        if rule == "*":
+            if not denied:
+                raise ValueError("MAICA_MVISTA_TRUSTED supports only the !* wildcard")
+            deny_unmarked = True
+            continue
+
+        try:
+            network = ipaddress.ip_network(rule, strict=False)
+        except ValueError as exc:
+            if "/" in rule or ":" in rule:
+                raise ValueError(
+                    f"Invalid MAICA_MVISTA_TRUSTED rule: {raw_rule}"
+                ) from exc
+            (denied_hosts if denied else allowed_hosts).add(rule.lower().rstrip("."))
+        else:
+            (denied_networks if denied else allowed_networks).append(network)
+
+    return (
+        denied_hosts,
+        allowed_hosts,
+        denied_networks,
+        allowed_networks,
+        deny_unmarked,
+    )
+
+
+async def _vision_host_allowed(host: str, raw_rules: str) -> bool:
+    host = host.lower().rstrip(".")
+    (
+        denied_hosts,
+        allowed_hosts,
+        denied_networks,
+        allowed_networks,
+        deny_unmarked,
+    ) = _parse_vision_host_rules(raw_rules)
+
+    if host in denied_hosts:
+        return False
+    if host in allowed_hosts:
+        return True
+
+    has_allow_rules = bool(allowed_hosts or allowed_networks)
+    has_deny_rules = bool(denied_hosts or denied_networks)
+    allow_unmarked = has_deny_rules or not has_allow_rules
+
+    try:
+        host_ip = ipaddress.ip_address(host)
+        resolved_ips = {host_ip}
+    except ValueError:
+        if not denied_networks and not allowed_networks:
+            return allow_unmarked and not deny_unmarked
+        try:
+            addr_info = await asyncio.get_running_loop().getaddrinfo(
+                host,
+                None,
+                type=socket.SOCK_STREAM,
+            )
+            resolved_ips = {ipaddress.ip_address(item[4][0]) for item in addr_info}
+        except socket.gaierror as exc:
+            raise MaicaInputWarning(
+                f"MVista image URL host cannot be resolved: {host}"
+            ) from exc
+
+    def matches(networks) -> bool:
+        return any(
+            ip.version == network.version and ip in network
+            for ip in resolved_ips
+            for network in networks
+        )
+
+    if matches(denied_networks):
+        return False
+    if matches(allowed_networks):
+        return True
+    return allow_unmarked and not deny_unmarked
 
 class WsBasicConfig(BaseModel):
     type: Literal["auth", "ping", "sping", "reconn", "params", "query"]
@@ -73,21 +168,25 @@ class WsQueryConfig(WsBasicConfig):
             if len(self.root) > int(G.A.KEEP_MVISTA):
                 raise MaicaInputWarning(f"At most {G.A.KEEP_MVISTA} images are allowed per query")
 
-            allowed_hosts = {
-                host.strip().lower()
-                for host in G.A.VISION_HOST_ALLOWLIST.split(",")
-                if host.strip()
-            }
             for image_url in self.root:
                 if len(image_url) > 2048:
                     raise MaicaInputWarning("MVista image URL is too long")
                 parsed = urlsplit(image_url)
                 if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                     raise MaicaInputWarning("MVista accepts only absolute HTTP(S) image URLs")
-                if parsed.username or parsed.password:
-                    raise MaicaInputWarning("MVista image URLs cannot contain credentials")
-                if allowed_hosts and parsed.hostname.lower() not in allowed_hosts:
-                    raise MaicaPermissionWarning("MVista image URL host is not allowed", 403)
+            return self
+
+        async def validate_hosts(self):
+            hosts = {
+                urlsplit(image_url).hostname
+                for image_url in self.root
+            }
+            allowed = await asyncio.gather(*(
+                _vision_host_allowed(host, G.A.MVISTA_TRUSTED)
+                for host in hosts
+            ))
+            if not all(allowed):
+                raise MaicaPermissionWarning("MVista image URL host is not allowed", 403)
 
             return self
 
@@ -97,7 +196,7 @@ class WsQueryConfig(WsBasicConfig):
 
     class ExTriggers(RootModel):
         """Extra triggers."""
-        root: list[Any]
+        root: list[dict]
 
     class PprtConfig(BaseModel):
         yield_interval: list[Annotated[int, Field(ge=1, le=1000)]] = Field(
@@ -134,6 +233,11 @@ class WsQueryConfig(WsBasicConfig):
     """Post-proc-realtime."""
 
     activated: Literal["query", "mspire", "mpostal"] = "query"
+
+    async def validate_vision_hosts(self):
+        if self.vision:
+            await self.vision.validate_hosts()
+        return self
 
     @model_validator(mode="after")
     def exclusion_det(self):
@@ -172,7 +276,7 @@ class WsQueryConfig(WsBasicConfig):
         if not self.reset:
             if self.chat_session <= -1:
                 if not isinstance(self.query, list):
-                    raise MaicaInputWarning("-1 session requires list input")
+                    raise MaicaInputWarning(f"-1 session requires list input, got {type(self.query).__name__}")
                 
                 if len(self.query) > 10:
                     raise MaicaInputWarning(f"-1 session cannot exceed 10 rounds, got {len(self.query)}")
@@ -182,9 +286,10 @@ class WsQueryConfig(WsBasicConfig):
             
             if (
                 self.chat_session >= 0
+                and self.activated == "query"
                 and not isinstance(self.query, str)
             ):
-                raise MaicaInputWarning("0~9 session requires str input")
+                raise MaicaInputWarning(f"0~9 session requires str input, got {type(self.query).__name__}")
             
             if (
                 self.chat_session != 0
@@ -213,23 +318,21 @@ class WsQueryConfig(WsBasicConfig):
             
         return self
 
-type UnionStage1Settings = Union[
-    WsPermissionConfig,
-    WsPingConfig,
-    WsSPingConfig,
-]
-type UnionStage2Settings = Union[
-    WsPingConfig,
-    WsSPingConfig,
-    WsReconnConfig,
-    WsSettingsConfig,
-    WsQueryConfig,
-]
-Stage1Settings = Annotated[
-    UnionStage1Settings,
+type Stage1Settings = Annotated[
+    Union[
+        WsPermissionConfig,
+        WsPingConfig,
+        WsSPingConfig,
+    ],
     Field(discriminator="type"),
 ]
-Stage2Settings = Annotated[
-    UnionStage2Settings,
+type Stage2Settings = Annotated[
+    Union[
+        WsPingConfig,
+        WsSPingConfig,
+        WsReconnConfig,
+        WsSettingsConfig,
+        WsQueryConfig,
+    ],
     Field(discriminator="type"),
 ]

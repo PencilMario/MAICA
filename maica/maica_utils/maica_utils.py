@@ -8,6 +8,7 @@ import functools
 import hashlib
 import os
 import re
+import ast
 import json
 import inspect
 import platform
@@ -77,6 +78,8 @@ class _lmlogger():
         self._buffer = ''
 
 lmlogger = _lmlogger()
+
+type TargetLangType = Literal['zh', 'en', 'auto']
 
 class MsgType():
     """For convenience."""
@@ -170,6 +173,9 @@ class MaicaConnectionWarning(CommonMaicaWarning):
 
 class MaicaInternetWarning(CommonMaicaWarning):
     """This suggests the backend request action is not behaving normal."""
+
+class MaicaResponseWarning(CommonMaicaError):
+    """This suggests the output is malformed."""
 
 RETRYABLE_EXCEPTIONS = (
     aiomysql.OperationalError,
@@ -431,13 +437,25 @@ class BilingualText():
             self.auto += other.auto
         return self
     
-    def to_str(self, target_lang: Literal['zh', 'en', 'auto']='zh') -> str:
+    def to_str(self, target_lang: TargetLangType='zh') -> str:
         if target_lang == 'zh':
             return self.zh
         elif target_lang == 'en':
             return self.en
         else:
             return self.auto
+
+    def as_str(self, func: Callable, *args, self_assign=False, **kwargs):
+        """Treat current bt as multiple strings."""
+        results = []
+        for i in (self.zh, self.en, self.auto):
+            results.append(func(*args, **kwargs))
+        results = tuple(results)
+
+        if self_assign:
+            self.zh, self.en, self.auto = results
+        
+        return results
 
 class PydUpdateMixin(BaseModel):
     """This adds update() method to pydantic models."""
@@ -497,9 +515,183 @@ class RobustList[T](list[T]):
             list_schema,
         )
 
+
 class SafeFormatDict(dict):
     def __missing__(self, key):
         return "{" + key + "}"
+
+
+class GenCorrectionModel(BaseModel):
+    """
+    Pydantic model with lightweight JSON output repair. GPT wrote this.
+
+    Intended for LLM generated JSON where formatting may be slightly invalid.
+    """
+
+    _default_resp: ClassVar[Optional[dict]] = None
+
+    @classmethod
+    def model_validate_json[T](
+        cls: type[T],
+        json_data: str | bytes,
+        *,
+        strict: bool | None = None,
+        **kwargs: Any,
+    ) -> T:
+        """
+        Try normal validation first.
+        If failed, apply conservative JSON repairs.
+        """
+
+        try:
+            return super().model_validate_json(
+                json_data,
+                **kwargs,
+            )
+
+        except ValidationError as ve:
+            sync_messenger(info=f"Validation failed for LLM response: {str(ve)}, trying basic fixes", type=MsgType.DEBUG)
+            
+            try:
+                repaired = cls._repair_json(json_data)
+                return super().model_validate(
+                    repaired,
+                    **kwargs,
+                )
+            except ValidationError as ve:
+
+                if default := cls._default_resp:
+                    sync_messenger(info=f"Basic fixes still failed for LLM response: {str(ve)}, returning default", type=MsgType.WARN)
+                    return super().model_validate(
+                        default,
+                        **kwargs,
+                    )
+                else:
+                    raise MaicaResponseWarning(f"Basic fixes still failed for LLM response: {str(ve)}, no default provided") from ve
+
+    @classmethod
+    def _repair_json(cls, raw: str | bytes) -> dict[str, Any]:
+        """
+        Apply common LLM JSON output fixes.
+        """
+
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+
+        text = raw.strip()
+
+        # ------------------------------------------------------------
+        # 1. Remove markdown code fences:
+        #
+        # Model:
+        # ```json
+        # {"a":1}
+        # ```
+        # ------------------------------------------------------------
+        text = re.sub(
+            r"^```(?:json)?\s*|\s*```$",
+            "",
+            text,
+            flags=re.I,
+        ).strip()
+
+
+        # ------------------------------------------------------------
+        # 2. Extract first JSON object.
+        #
+        # Model:
+        # "Here is the answer: {...}"
+        # ------------------------------------------------------------
+        match = re.search(
+            r"\{.*\}",
+            text,
+            flags=re.S,
+        )
+
+        if match:
+            text = match.group(0)
+
+
+        # ------------------------------------------------------------
+        # 3. Parse JSON normally.
+        # ------------------------------------------------------------
+        try:
+            data = json.loads(text)
+
+        except json.JSONDecodeError:
+
+            # --------------------------------------------------------
+            # 4. Python dict style:
+            #
+            # {'a': True}
+            #
+            # Common with some reasoning models.
+            # --------------------------------------------------------
+            try:
+                data = ast.literal_eval(text)
+            except Exception:
+                data = text
+
+
+        if not isinstance(data, dict):
+            if isinstance(data, str) and len(cls.model_fields) == 1:
+                field_name, field = next(iter(cls.model_fields.items()))
+
+                try:
+                    TypeAdapter(field.annotation).validate_python(
+                        data,
+                        strict=True,
+                    )
+                except ValidationError:
+                    pass
+                else:
+                    return {field_name: data}
+
+            raise ValueError(
+                "LLM output is not a JSON object"
+            )
+
+
+        data = cls._repair_schema_echo(data)
+
+
+        return data
+
+
+    @classmethod
+    def _repair_schema_echo(
+        cls,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Fix model accidentally returning JSON schema.
+
+        Example:
+
+        {
+            "properties": {
+                "requested": {},
+                "operation": {}
+            }
+        }
+
+        This happens when backend does not implement
+        structured output constrained decoding.
+        """
+
+        if (
+            "properties" in data
+            and isinstance(data["properties"], dict)
+            and not any(
+                k in data
+                for k in cls.model_fields.keys()
+            )
+        ):
+            properties = data["properties"]
+            return properties
+
+        return data
+    
 
 class DummyClass():
     """Yes, dummy class."""
@@ -564,6 +756,55 @@ async def sleep_forever() -> None:
     """Make a coroutine sleep to the end of the world."""
     future = asyncio.Future()
     await future
+
+async def run_staged_tasks(
+        tasks_stages: Sequence[Sequence[Callable[[], Awaitable[Any]]]],
+    ) -> None:
+    """Run task factories in stages, allowing a task to span adjacent stages.
+
+    A task factory that occurs in consecutive stages is started at its first
+    occurrence and awaited at its last occurrence. Other tasks are awaited in
+    the stage where they occur. A later, non-consecutive occurrence starts a
+    new task.
+    """
+    stages = tuple(tuple(stage) for stage in tasks_stages)
+
+    for stage in stages:
+        task_ids = [id(task_factory) for task_factory in stage]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("A task may only occur once in the same stage")
+
+    async def invoke(task_factory: Callable[[], Awaitable[Any]]) -> Any:
+        return await task_factory()
+
+    running_tasks: dict[int, asyncio.Task[Any]] = {}
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for stage_index, stage in enumerate(stages):
+                next_task_ids = (
+                    {id(task_factory) for task_factory in stages[stage_index + 1]}
+                    if stage_index + 1 < len(stages)
+                    else set()
+                )
+                ending_tasks: list[asyncio.Task[Any]] = []
+
+                for task_factory in stage:
+                    task_id = id(task_factory)
+                    running_task = running_tasks.get(task_id)
+                    if running_task is None:
+                        running_task = tg.create_task(invoke(task_factory))
+                        running_tasks[task_id] = running_task
+
+                    if task_id not in next_task_ids:
+                        ending_tasks.append(running_task)
+                        del running_tasks[task_id]
+
+                if ending_tasks:
+                    await asyncio.gather(*ending_tasks)
+    except* Exception as eg:
+        # Raise one regular exception so callers need not handle ExceptionGroup.
+        raise eg.exceptions[0]
 
 def alt_tools(tools: list) -> list:
     """If ALT_TOOLCALL"""
@@ -643,6 +884,51 @@ def proceed_common_text(text: str, is_json=False) -> Union[str, list, dict]:
         answer_fin = ''
     return answer_fin
 
+
+def list_to_bullets(li: list[str | BilingualText], indent: int = 0):
+    """Has a leading slash n, no trailing."""
+    bt = BilingualText()
+    for i in li:
+        bt += " " * indent
+        bt += "\n- "
+        bt += i
+
+    return bt
+
+
+def pyd_to_openai(
+    model: Type[BaseModel],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """
+    Convert Pydantic model to OpenAI Responses API text.format.
+
+    Args:
+        model:
+            Pydantic BaseModel class.
+        name:
+            Schema name used by Responses API.
+            Defaults to model class name.
+
+    Returns:
+        A valid Responses API `text` field.
+    """
+
+    schema = model.model_json_schema()
+
+    # Responses API strict JSON schema requirements
+    schema.setdefault("additionalProperties", False)
+
+    return {
+        "format": {
+            "type": "json_schema",
+            "name": name or model.__name__,
+            "strict": True,
+            "schema": schema,
+        }
+    }
+
+
 async def messenger(websocket=None, *args, **kwargs) -> None:
     """Together with websocket.send()."""
     ws_tuple = sync_messenger(*args, **kwargs)
@@ -655,13 +941,32 @@ def sync_messenger(
         info = '',
         code = 0,
         tracker_id = '',
-        error: Optional[CommonMaicaException] = None,
+        error: Optional[Exception] = None,
         type = '',
         color = '',
         no_print = False,
         **kwargs
-    ) -> tuple:
+    ):
     """It could handle most log printing and exception raising jobs pretty automatically."""
+    # Standardize errors
+    if error and not isinstance(error, CommonMaicaException):
+        if (
+            code >= 500
+            or type == MsgType.ERROR
+        ):
+            ce_type = CommonMaicaError
+        else:
+            ce_type = CommonMaicaWarning
+
+        if not info:
+            info = "Auto exception from unified exception: "
+
+        new_error = ce_type(f"{info}{str(error)}")
+        new_error.__cause__ = error
+        error = new_error
+
+        # Avoid interrupting followings
+        info = ''
 
     # For separator lines
     try:
@@ -775,7 +1080,7 @@ def sync_messenger(
             msg_send += f" <{tracker_id}>"
 
     # Frame tracking settings
-    frametrack_d = {"error": 99, "warn": 2}
+    frametrack_d = {"error": 99, "warn": 1}
     if type in frametrack_d:
         stack = inspect.stack()
         stack.pop(0)
@@ -845,10 +1150,6 @@ def sync_messenger(
                     for stack_layer in stack[frametrack_d['error']::-1]:
                         logger.error((color or colorama.Fore.RED) + f"! ERROR happened when executing {stack_layer.function} at {stack_layer.filename}#{stack_layer.lineno}:")
                 logger.error((color or colorama.Fore.LIGHTRED_EX) + msg_print)
-
-    # This is pretty deprecated but leave it be
-    if error and error.send is False:
-        return
     
     ws_tuple = (code, status, msg_send, type)
     return ws_tuple
@@ -972,7 +1273,7 @@ def try_getattr(o, *names) -> Optional[any]:
             break
     return res
 
-def beautify_time(dt: datetime.time, target_lang: Literal['zh', 'en', 'auto'] = 'zh', include_adj = True):
+def beautify_time(dt: datetime.time, target_lang: TargetLangType = 'zh', include_adj = True):
     """
     Beautifies current time. No date.
 
@@ -998,7 +1299,7 @@ def beautify_time(dt: datetime.time, target_lang: Literal['zh', 'en', 'auto'] = 
         case time if 18 <= time.hour < 23:
             time_range = _Bt('晚上', ' at night')
         case time if 23 <= time.hour:
-            time_range = _Bt('深夜', ' at midnight')
+            time_range = _Bt('深夜', ' late at night')
 
     if include_adj:
         time_friendly = f"{time_range.zh}{time:%H:%M:%S}" if target_lang == 'zh' else f"{time:%H:%M:%S}{time_range.en}"
@@ -1007,7 +1308,7 @@ def beautify_time(dt: datetime.time, target_lang: Literal['zh', 'en', 'auto'] = 
 
     return time_friendly
 
-def beautify_date(dt: datetime.date, target_lang: Literal['zh', 'en', 'auto'] = 'zh', hemisphere: Literal['N', 'S'] = 'N', include_adj = True):
+def beautify_date(dt: datetime.date, target_lang: TargetLangType = 'zh', hemisphere: Literal['N', 'S'] = 'N', include_adj = True):
     """
     Beautifies current date. No time.
     
@@ -1076,7 +1377,7 @@ def is_mcore_vl():
 
 def is_rag_enabled():
     """If this server instance could utilize RAG."""
-    return bool(G.A.EMBEDDING_ADDR and G.A.VECTOR_DB_PATH)
+    return bool(G.A.EMBEDDING_ADDR and G.A.MILVUS_ADDR)
 
 def is_auth_sqlite():
     """If auth_db is sqlite, else mysql."""
@@ -1086,7 +1387,7 @@ def is_data_sqlite():
     """If data_db is sqlite, else mysql."""
     return bool(G.A.DB_ADDR == "sqlite")
 
-def to_str(obj: str | BilingualText, target_lang: Literal['zh', 'en', 'auto']='zh'):
+def to_str(obj: str | BilingualText, target_lang: TargetLangType='zh'):
     """Call to_str if bt, else as-is."""
     if isinstance(obj, BilingualText):
         return obj.to_str(target_lang)

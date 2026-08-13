@@ -26,7 +26,7 @@ from maica.maica_utils import (
 from maica.maica_utils import session_mgr, stream_buffer
 from maica.maica_utils.database_utils import ReadOnlySession
 from maica.maica_utils.users_utils import FscUsersFuncMixin
-from maica.initializer.migrations import migration_4
+from maica.initializer.migrations import migration_4, migration_5
 
 
 def test_create_or_update_flushes_insert_and_updates_existing_row() -> None:
@@ -37,12 +37,23 @@ def test_create_or_update_flushes_insert_and_updates_existing_row() -> None:
             async with engine.begin() as conn:
                 await conn.run_sync(SqlBaseData.metadata.create_all)
             async with session_factory() as dbs, dbs.begin():
-                await sqla_create_or_update(dbs, SqlMsCache, {"hash": "abc"}, {"content": "first"})
+                await sqla_create_or_update(
+                    dbs,
+                    SqlMsCache,
+                    {"hash": "abc"},
+                    {"user_id": 1, "content": "first"},
+                )
             async with session_factory() as dbs, dbs.begin():
-                await sqla_create_or_update(dbs, SqlMsCache, {"hash": "abc"}, {"content": "second"})
+                await sqla_create_or_update(
+                    dbs,
+                    SqlMsCache,
+                    {"hash": "abc"},
+                    {"user_id": 1, "content": "second"},
+                )
             async with session_factory() as dbs:
                 rows = (await dbs.scalars(sqlalchemy.select(SqlMsCache))).all()
                 assert len(rows) == 1
+                assert rows[0].user_id == 1
                 assert rows[0].content == "second"
         finally:
             await engine.dispose()
@@ -90,6 +101,47 @@ def test_partial_archive_can_create_its_first_row() -> None:
     asyncio.run(scenario())
 
 
+def test_db_bound_object_loads_blank_text_as_empty_content() -> None:
+    persistent = SessionPersistent()
+    persistent.load("   ")
+    assert persistent.content == {}
+
+
+def test_dbo_acquire_binds_fsc_only_while_holding_lock() -> None:
+    async def scenario() -> None:
+        def make_fsc() -> FullSocketsContainer:
+            fsc = FullSocketsContainer()
+            fsc.maica_settings.verification.user_id = 1
+            fsc.maica_settings.temp.chat_session = 0
+            return fsc
+
+        session_mgr._sessions_index["session_triggers"].clear()
+        first_fsc = make_fsc()
+        second_fsc = make_fsc()
+        second_seen: list[bool] = []
+        waiter = None
+
+        async def second_request() -> None:
+            async with session_mgr.acquire_dbo("trigger", second_fsc) as trigger:
+                second_seen.append(trigger.fsc is second_fsc)
+                trigger._check_ess()
+
+        try:
+            async with session_mgr.acquire_dbo("trigger", first_fsc) as trigger:
+                waiter = asyncio.create_task(second_request())
+                await asyncio.sleep(0)
+                assert trigger.fsc is first_fsc
+
+            await waiter
+            assert second_seen == [True]
+        finally:
+            if waiter is not None and not waiter.done():
+                await waiter
+            session_mgr._sessions_index["session_triggers"].clear()
+
+    asyncio.run(scenario())
+
+
 def test_session_and_buffer_gc_remove_only_stale_unlocked_entries() -> None:
     class Destroyable:
         def __init__(self) -> None:
@@ -110,17 +162,6 @@ def test_session_and_buffer_gc_remove_only_stale_unlocked_entries() -> None:
     assert stream_buffer.buffers_gc(time.time()) == [1]
 
 
-def test_db_bound_defaults_are_plain_values_and_empty_text_is_rejected() -> None:
-    persistent = SessionPersistent()
-    assert persistent.session_num == 0
-    try:
-        persistent.load("")
-    except Exception as exc:
-        assert "empty" in str(exc).lower()
-    else:
-        raise AssertionError("empty serialized data was accepted")
-
-
 def test_current_schema_migration_is_idempotent_on_sqlite() -> None:
     async def scenario() -> None:
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -133,6 +174,8 @@ def test_current_schema_migration_is_idempotent_on_sqlite() -> None:
                 await conn.run_sync(SqlBaseData.metadata.create_all)
             await migration_4.migrate()
             await migration_4.migrate()
+            await migration_5.migrate()
+            await migration_5.migrate()
         finally:
             DatabaseUtils.engine_data = old_engine
             G.A.VECTOR_DB_PATH = old_vector_path

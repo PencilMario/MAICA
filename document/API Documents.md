@@ -102,7 +102,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 自v1.1更新后, 在长连接会话中, 服务端只接受传入json格式的内容.
 
-> ~~出于各种原因, 长连接不接受超过4096字符长度的输入.~~
+> ~~出于各种原因, 长连接不接受超过4096字符长度的输入.~~  
 > 自v1.3后, 长连接的输入长度上限调整为64KB.
 
 服务端只输出json格式的内容. 每个输出固定包含以下结构:
@@ -119,7 +119,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 连接建立时, 你会收到一条通告, 其status为maica_connection_initiated.
 
 * 连接建立通告的content有10%概率会变为特殊句子, 有效地防止了项目显得过于严肃.
-* 连接建立通告是中文的, 因为它的内容没有实际意义. 在没有中文字体的情况下可能显示异常.
+* 连接建立通告是中英双语的, 用"|"分隔.
 
 ## 登录:
 
@@ -167,16 +167,16 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
         "session_len_limit": 8192,
 
         "prompt_pname_repl": false,
-        "prompt_allow_nickname": false,
+        "prompt_allow_nickname": true,
         "mf_llm_concl": false,
         "mf_sf_access_impl": 1,
-        "mf_const_sf_access": 1,
+        "mf_const_sf_access": 0,
         "mf_const_tools": 1,
         "esearch_llm_concl": true,
         "mf_precheck_mt": true,
-        "mt_concl_memory": 1,
+        "memory_concl_arc": 1,
         "nsfw_acceptive": true,
-        "mf_context_rnds": 0,
+        "mf_context_rnds": 1,
         "mt_context_rnds": 1,
         "tz": null,
         "gen_quality_chk": false,
@@ -233,9 +233,9 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 * session_len_limit: 会话保留的最大长度. 范围512-28672.
 
-    * 按字符数计算. 每3个ASCII字符只占用一个字符长度.
-    * 字符数超过限制的 2/3 之后, 每次生成结束会发送警告.
-    * 字符数超过限制后, MAICA会裁剪其中较早的部分, 直至少于限制的 2/3 .
+    * 根据后端实例配置, 按3bytes或实际token计算.
+    * 长度超过限制的 2/3 之后, 每次生成结束会发送警告.
+    * 长度超过限制后, MAICA会裁剪其中较早的部分, 直至少于限制的 2/3 .
     * 过大或过小的值可能导致表现和性能问题.
 
 ### 高级设置:
@@ -277,7 +277,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
     + 显著提高设定数据的干预积极性.
     - 容易引入干扰信息, 考验核心模型的抗干扰能力.
-    - 效果偏弱, 在大多数情况下可能只是在浪费时间.
+    - 在大多数情况下可能只是在浪费时间.
 
 * mf_const_tools: 即使MFocus未调用工具, 也提供一些工具的结果.
 
@@ -291,6 +291,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 * esearch_llm_concl: 在MFocus调用互联网搜索的情况下, 要求其整理一遍结果.
 
     + 大多数情况下信息密度更高, 表现更稳定.
+    + 若后端启用了responses serp实现, 该配置强制启用.
     - 涉及互联网搜索时生成速度更慢.
     - 可能会对核心模型的回答方式产生误导.
 
@@ -299,13 +300,13 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     + 从原理上缓解MTrigger失步问题.
     - 在少数情况下对语言的自然性产生破坏.
 
-* mt_concl_memory: 实验性功能, 在session归档/清除时, 生成记忆概要用于保留有效信息.
+* memory_concl_arc: 实验性功能, 在session归档/清除时, 生成记忆概要用于保留有效信息.
 
     * 0: 关闭.
     * 1: 仅在session超长并自动裁剪时轮转概要.
     * 2: 在session自动裁剪或手动清除时轮转概要.
 
-    + 能从对话中保留持久性信息, 终于不用再全靠手填了.
+    + 对离开上下文窗口的对话生成概要, 作为短时记忆.
     - 触发生成概要的操作会变慢很多.
     - 可能导致注意力涣散, 考验核心模型的抗干扰能力.
 
@@ -646,7 +647,7 @@ MAICA长连接有一系列附加功能可用.
 
 * MVista的实现基于独立VLM, 后端部署不一定有实现. 向未实现MVista的后端发起请求会被忽略.
 * MVista是MFocus的下属模块. 要使用MVista, 你必须启用MFocus.
-* 图片链接只接受绝对HTTP(S) URL. 部署设置了`MAICA_VISION_HOST_ALLOWLIST`时, 主机名还必须位于允许列表中.
+* 图片链接只接受绝对HTTP(S) URL. 部署可通过`MAICA_MVISTA_TRUSTED`配置规则, 详见配置注释.
 
 * 图片链接可以一次上传多个, 但最多不超过后端实例允许保存的上限.
 * 图片链接必须是完整链接, 可以来自后端专用存储或任意网络图床, 必须开放公开下载.
@@ -682,16 +683,17 @@ MAICA长连接有一系列附加功能可用.
 
 query可以携带临时的存档内容, 并逐键临时覆盖上传的存档内容. 该功能适合上传存档中可能频繁变化的内容.
 
-* 应当注意, 由于RAG/Reranker对临时内容缺乏优化, 此功能不适合用于传输完整存档.
+* 应当注意, 由于优化等问题, 此功能不适合用于传输完整存档. 使用此功能传输的存档会更显著地降低sf_access速度.
+* 临时存档总生效条目(含mas_player_additions内部)不允许超过32条.
+* 对于选择纯RAG实现sf_access的用户, 临时存档不会生效.
 * 关于存档的具体格式参见附录.
 
 ### 单轮MTrigger触发器表:
 
-`{"type": "query", "chat_session": "1", "query": "你好啊", "trigger": [{"template": "common_affection_template"}]}`
+`{"type": "query", "chat_session": "1", "query": "你好啊", "trigger": [{"template": "common_affection_template", "name": "alter_affection"}]}`
 
 query可以携带临时的触发器表, 并临时添加到上传的触发器表. 该功能适合上传触发器表中可能频繁变化的内容.
 
-* 应当注意, 由于RAG/Reranker对临时内容缺乏优化, 此功能不适合用于传输完整触发器表.
 * 若临时触发器表中包含与上传的触发器表中name相同的条目, 其将临时update到触发器表.
 * 关于触发器表的具体格式参见附录.
 
@@ -743,7 +745,7 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
     其中content为json格式的存档, 关于存档的具体格式参见附录.
 
     * 存档是与chat_session一一对应的, 仅接受0-9.
-    * 若对应的chat_session没有存档, 读取时默认会使用chat_session 1的存档.
+    > 自v1.3后, 存档不存在时不再静默选取默认.
 
 该端点不会返回content.
 
@@ -851,7 +853,7 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 ### 在线加密令牌:
 
-> 端点: POST `/register`（旧版GET形式仅为兼容保留）
+> 端点: POST `/register` (兼容旧版GET)
 
 * 需要content
 
@@ -860,6 +862,8 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
     `{"username": "你的论坛用户名", "password":"你的论坛密码(明文)"}`  
     或:  
     `{"email": "你的论坛绑定邮箱", "password":"你的论坛密码(明文)"}`
+
+    用户名最多100字符, 邮箱最多150字符, 密码最多72个UTF-8字节.
 
     * 在前端设计中不应明文储存登录信息.
     * 新客户端必须使用POST JSON请求体. GET查询参数会暴露在URL历史和中间日志中.
@@ -1063,12 +1067,12 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
     "mf_llm_concl": false,
     "nsfw_acceptive": true,
     "mt_context_rnds": 1,
-    "mf_context_rnds": 0,
+    "mf_context_rnds": 1,
     "presence_penalty": 0.34,
     "seed": null,
     "savefile_access": true,
     "prompt_pname_repl": false,
-    "prompt_allow_nickname": false,
+    "prompt_allow_nickname": true,
     "stream_output": true,
     "target_lang": "zh",
     "temperature": 0.22,
@@ -1093,6 +1097,7 @@ mas_affection #int
 mas_geolocation #str
 
 mas_player_additions #["[player]喜欢吃寿司.", "[player]喜欢初音未来.", "[player]不喜欢猫"]
+target_lang #Literal["zh", "en", "auto"]
 
 _mas_pm_added_custom_bgm	Player has added custom music to the game before.
 _mas_pm_religious	Is the player religious?
@@ -1221,6 +1226,8 @@ sessions
 * ~~mas_sf_hcb为高可自定义性开关. 设为true后, MFocus将停止索引任何来自MAS存档的基本信息, 并能够同时检索至多360项补充数据.~~  
 * mas_sf_hcb自v1.3后被弃用, 请直接管理上传的存档条目实现.
 
+* target_lang为MAICA目标语言, 用于在embedding阶段选择语言.
+
 原理上, 任何条目都是可缺省的. 缺省关键变量将使其被默认值替代, 缺省事件变量将使其退出MFocus索引.
 
 原理上, 上传的存档json可以包含冗余的条目, 但其整体格式必须是完整可读的json.
@@ -1232,9 +1239,13 @@ sessions
 
 ## 模板common_affection_template:
 
-`{"template": "common_affection_template", "name": "alter_affection"}`
+```json
+{
+    "template": "common_affection_template"
+}
+```
 
-其中name的值可以任取, 建议使用alter_affection.
+其中name的值不可设置, 固定为alter_affection.
 
 使用该模板的触发器会根据用户输入与上文内容, 决策对好感度应做的调整.
 
@@ -1242,13 +1253,45 @@ sessions
 
 好感度调幅默认为不超过+3.0, 你可以自行设定乘幅. 简单地对其调幅举例, 日常的问好大约会输出+0.2, 对美貌的称赞大约会输出+0.8, 简短的示爱大约会输出+1.5, 长段的示爱大约会输出+3.0.
 
-输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"alter_affection": {"alter_value": 1.5}}, "type": "carriage", "timestamp": 时间戳(秒)}`
+输出范例:
+```json
+{
+    "code": 200,
+    "status": "maica_mtrigger_trigger",
+    "content": {
+        "name": "alter_affection",
+        "arguments": {
+            "alter_value": 1.5
+        }
+    },
+    "type": "carriage",
+    "timestamp": 1234567.89
+}
+```
+> 自v1.3后, 返回值的规范有改动, 由{name: args}变为{"name": name, "arguments": args}
 
 该模板的触发器最多存在一个.
 
 ## 模板common_switch_template:
 
-`{"template": "common_switch_template", "name": "change_clothes", "exprop": {"item_name": {"zh": "衣服", "en": "clothes"}, "item_list": ["白色连衣裙", "黑色连衣裙"], "curr_item": "白色连衣裙", "suggestion": false}}`
+```json
+{
+    "template": "common_switch_template",
+    "name": "change_clothes",
+    "exprop": {
+        "item_name": {
+            "zh": "衣服",
+            "en": "clothes"
+        },
+        "item_list": [
+            "白色连衣裙",
+            "黑色连衣裙"
+        ],
+        "curr_item": "白色连衣裙",
+        "suggestion": false
+    }
+}
+```
 
 其中name的值可以任取, 建议格式与范例尽可能一致且能表明用途.
 
@@ -1258,7 +1301,21 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 若将suggestion设为true, 则若selection返回false将会额外返回suggestion, 其值为一个推荐参考条目.
 
-输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"change_clothes": {"choice": "黑色连衣裙"}}, "type": "carriage", "timestamp": 时间戳(秒)}`
+输出范例:
+```json
+{
+    "code": 200,
+    "status": "maica_mtrigger_trigger",
+    "content": {
+        "name": "change_clothes",
+        "arguments": {
+            "choice": "黑色连衣裙"
+        }
+    },
+    "type": "carriage",
+    "timestamp": 1234567.89
+}
+```
 
 该模板的触发器最多存在6个.
 
@@ -1266,7 +1323,23 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 ## 模板common_meter_template:
 
-`{"template": "common_meter_template", "name": "change_distance", "exprop": {"item_name": {"zh": "距离", "en": "distance"}, "value_limits": [0.0, 2.5], "curr_value": 0.67}}`
+```json
+{
+    "template": "common_meter_template",
+    "name": "change_distance",
+    "exprop": {
+        "item_name": {
+            "zh": "距离",
+            "en": "distance"
+        },
+        "value_limits": [
+            0,
+            2.5
+        ],
+        "curr_value": 0.67
+    }
+}
+```
 
 其中name的值可以任取, 建议格式与范例尽可能一致且能表明用途.
 
@@ -1274,21 +1347,91 @@ exprop的值是该模板的附加参数, 其中item_name的值为选择类目的
 
 如果触发器匹配了请求, 但范围内没有值满足条件, 返回的选择将是false.
 
-输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"change_distance": {"value": 0.75}}, "type": "carriage", "timestamp": 时间戳(秒)}`
+输出范例:
+```json
+{
+    "code": 200,
+    "status": "maica_mtrigger_trigger",
+    "content": {
+        "name": "change_distance",
+        "arguments": {
+            "value": 0.75
+        }
+    },
+    "type": "carriage",
+    "timestamp": 1234567.89
+}
+```
 
 该模板的触发器最多存在6个.
 
 ## 自由模板:
 
-`{"template": "customized", "name": "some_name", "exprop": {"item_name": {"zh": "关闭游戏", "en": "close game"}}}`
+```json
+{
+    "template": "customized",
+    "name": "some_name",
+    "exprop": {
+        "item_name": {
+            "zh": "关闭游戏",
+            "en": "close game"
+        }
+    }
+}
+```
 
 其中name的值可以任取, 建议格式与范例尽可能一致且能表明用途.
 
 exprop的值是该模板的附加参数, 其中item_name的值为该触发器的用途(双语)
 
-输出范例: `{"code": 200, "status": "maica_mtrigger_trigger", "content": {"some_name": {}}, "type": "carriage", "timestamp": 时间戳(秒)}`
+输出范例:
+```json
+{
+    "code": 200,
+    "status": "maica_mtrigger_trigger",
+    "content": {
+        "name": "some_name",
+        "arguments": {}
+    },
+    "type": "carriage",
+    "timestamp": 1234567.89
+}
+```
 
 该模板的触发器最多存在20个.
+
+## 长时记忆模板
+
+```json
+{
+    "template": "memory_writeback_template"
+}
+```
+
+其中name的值不可设置, 固定为write_memory.
+
+如果记忆触发器被提供, MTrigger将根据对话内容, 尝试编写简洁的记忆条目, 用于mas_player_additions.
+> mas_player_additions本身由前端管理并上传至后端, 该trigger本身不会将结果同步到后端.  
+> 该记忆与memory_concl_arc性质作用不同, 后者更接近于"会话总结/上下文压缩"的概念.  
+> 此外, 该触发器的输出将被自动与当前mas_player_additions对比去重, 这可能会导致更长的总响应时间.
+
+输出范例:
+```json
+{
+    "code": 200,
+    "status": "maica_mtrigger_trigger",
+    "content": {
+        "name": "write_memory",
+        "arguments": {
+            "memory_item": "{player_name}喜欢巧克力"
+        }
+    },
+    "type": "carriage",
+    "timestamp": 1234567.89
+}
+```
+
+该模板的触发器最多存在一个.
 
 对于未注明双语的条目, 可以任选中文或英文, 建议与用户语言保持一致.
 

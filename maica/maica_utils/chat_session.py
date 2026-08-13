@@ -4,6 +4,7 @@ This module is for v2 session management, applied for DAA4.
 """
 from __future__ import annotations
 
+import re
 import time
 import orjson
 import types
@@ -21,17 +22,16 @@ from .database_models import *
 from .emotions import *
 
 _Bt = BilingualText
+_PROMPT_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
 
 
-def _list_to_bullets(l: list[str | BilingualText], indent: int = 0):
-    """Has a leading slash n, no trailing."""
-    bt = _Bt()
-    for i in l:
-        bt += " " * indent
-        bt += "\n- "
-        bt += i
-
-    return bt
+def _replace_prompt_placeholders(text: str, values: Mapping[str, object]) -> str:
+    """Replace known simple placeholders without parsing arbitrary brace content."""
+    return _PROMPT_PLACEHOLDER_RE.sub(
+        lambda match: str(values[match.group(1)])
+        if match.group(1) in values else match.group(0),
+        text,
+    )
 
 
 class MaicaSessionItem(BaseModel):
@@ -58,7 +58,7 @@ class MaicaSessionItem(BaseModel):
 
     role: Literal["system", "user", "assistant", "misc"] = 'misc'
     content: str | BilingualText = ''
-    target_lang: Optional[Literal['zh', 'en', 'auto']] = None
+    target_lang: Optional[TargetLangType] = None
     context: Context = Field(default_factory=Context)
 
     # If item role is misc, we stop using maica format and store entire object.
@@ -94,16 +94,17 @@ class MaicaSessionItem(BaseModel):
         return self.model_dump(**kwargs)
 
     
-    def utilize(self, text_only: Literal[False, None, True] = None) -> dict:
+    def utilize(self, text_only: Literal[False, None, True] = None, target_lang: Optional[TargetLangType] = None) -> dict:
         """
         text_only:
         False: force image
         None: auto decide (for core model)
         True: disable image
         """
+        target_lang = target_lang or self.target_lang or "zh"
         if self.role in ["system", "user", "assistant"]:
             d = {"role": self.role}
-            content = to_str(self.content, self.target_lang)
+            content = to_str(self.content, target_lang)
 
             if (
                 (
@@ -112,8 +113,7 @@ class MaicaSessionItem(BaseModel):
                 ) or
                 text_only is False
             ):
-                image_urls = self.context.image_urls
-                if image_urls:
+                if image_urls := self.context.image_urls:
                     content = [
                         {"type": "text", "text": content}
                     ]
@@ -149,7 +149,7 @@ class MaicaSessionItem(BaseModel):
                 known_str = known_info["generated_guidance"]
 
             else:
-                known_str = _list_to_bullets(known_info.values()).to_str(self.target_lang)
+                known_str = list_to_bullets(known_info.values()).to_str(self.target_lang)
         else:
             known_str = ""
         return known_str
@@ -158,7 +158,7 @@ class MaicaSessionItem(BaseModel):
     def form_generic_help(self):
         """Much simpler. This needs a default placeholder since it could actually be empty."""
         generic_help = self.context.generic_help
-        generic_str = _list_to_bullets(generic_help).to_str(self.target_lang)
+        generic_str = list_to_bullets(generic_help).to_str(self.target_lang)
 
         if not generic_str:
             generic_str = _Bt(
@@ -211,6 +211,8 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
             )
 
     def local_sync(self, from_which = "content"):
+        # Normal dbos' content are directly used, but sessions' are self
+        # So by content here, we want to from self. the actual content just being hidden middleware
         if from_which == "content":
             self.content = self.json()
         super().local_sync(from_which)
@@ -311,14 +313,14 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
             # We do not want to add for mfocus, it's kinda useless, so judge by manual_prompt
             if not manual_prompt:
                 # We decide by constant because even if no help text acquired, we still want to add emo help
-                if int(G.A.MCORE_GENERIC):
+                if G.A.MCORE_GENERIC and int(G.A.MCORE_GENERIC):
                     prompt += "\n"
                     prompt += _Bt(
                         G.A.PROMPT_ZGP,
                         G.A.PROMPT_EGP,
                         G.A.PROMPT_AGP,
                     )
-                    format_kvs['emo_list'] = _list_to_bullets(zlist_ai if target_lang == 'zh' else elist_ai).to_str(target_lang)
+                    format_kvs['emo_list'] = list_to_bullets(zlist_ai if target_lang == 'zh' else elist_ai).to_str(target_lang)
                     format_kvs['ds_examples'] = curr_item.form_generic_help()
 
             # Add extra info if required
@@ -326,33 +328,42 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
                 prompt += "\n"
                 prompt += extra_info
 
+            # Add nickname handling
+            nickname = _Bt(
+                "(昵称[player_nickname])",
+                "(nickname [player_nickname])",
+            )
+            format_kvs["player_nickname"] = nickname if curr_context.apply_nickname else ""
+
             for k, v in format_kvs.items():
                 format_kvs[k] = to_str(v, target_lang)
 
+        pname_format_kvs = {"player_name": curr_context.player_name}
+
         prompt = prompt.to_str(target_lang)
 
-        nickname = _Bt(
-            "(昵称[player_nickname])",
-            "(nickname [player_nickname])",
-        )
-        pname_format_kvs = {
-            "player_name": curr_context.player_name,
-            "player_nickname": nickname.to_str(target_lang) if curr_context.apply_nickname else "",
-        }
         # First handle info
-        prompt = prompt.format_map(SafeFormatDict(format_kvs))
+        prompt = _replace_prompt_placeholders(prompt, format_kvs)
         # Then handle names, to include name in info
-        prompt = prompt.format_map(SafeFormatDict(pname_format_kvs))
+        prompt = _replace_prompt_placeholders(prompt, pname_format_kvs)
 
         # Then inject
         # Note that system prompt item should not be modified from external
         self[0].content = prompt
 
+        # For safety considerations, we just flattern all possible bt contents here
+        for item in self:
+            if isinstance(item.content, _Bt):
+                item.content = item.content.to_str(target_lang)
+
+        # If MSpire or MPostal, there will be placeholders in its content
+        if curr_item.role == "user":
+            curr_item.content = _replace_prompt_placeholders(curr_item.content, pname_format_kvs)
+
         # Uncomment this for debugging
         # print(prompt)
 
-    def json(self) -> list:
-        self._utilize_context()
+    def json(self):
         return [i.json() for i in self]
     
     def utilize(
@@ -375,6 +386,10 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
         """To crop_archived."""
         # Common
         self._check_ess()
+
+        # Partial archive does not contain system
+        if self[0].role == "system":
+            self.pop(0)
 
         # Ensure row exists
         if not self.prim_key_id:
@@ -454,10 +469,13 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
 
         async def tokens_calc(messages):
             if use_api:
-                return await _tokens_calc(messages)
+                tokens = await _tokens_calc(messages)
             else:
                 # It's binary already, we just take bytes / 3 as a approximation of token count
-                return len(orjson.dumps(messages)) / 3
+                tokens = len(orjson.dumps(messages)) / 3
+
+            sync_messenger(info=f"Session has {tokens} tokens in total", type=MsgType.DEBUG)
+            return tokens
 
         def tokens_eval(count):
             match count:
@@ -471,10 +489,14 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
         cycle = 0
         last_self_len = len(self)
         archiver = MaicaSession(self.session_num, self.fsc)
+        # to_partial_archive pops system anyway, so it's okay to sanitize here first for convenience of memory
+        archiver.sanitize()
         
         if not self.prim_key_id:
             await self.init_db()
         archiver.prim_key_id = self.prim_key_id
+        # Inherit its memory
+        archiver[0].context.memory_concl = self[0].context.memory_concl
 
         while True:
             cycle += 1
@@ -500,7 +522,7 @@ class MaicaSession(list[MaicaSessionItem], DbBoundObject):
 
             # Here be the deadlock preventions
             if last_self_len == len(self):
-                raise MaicaDbWarning(f"Session cropper hit unexpected dead loop.\nSelf dump: {str(self)}\nArchiver dump: {str(archiver)}")
+                raise MaicaDbError(f"Session cropper hit unexpected dead loop.\nSelf dump: {str(self)}\nArchiver dump: {str(archiver)}")
             last_self_len = len(self)
 
             if cycle >= 100:

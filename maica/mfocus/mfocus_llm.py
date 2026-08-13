@@ -16,6 +16,7 @@ _Bt = BilingualText
 _Wtp = WrappedOpenAIToolProperty 
 _Wt = WrappedOpenAITool
 _Wtn = WrappedOpenAIToolNamespace
+_Nt = NativeOpenAITool
 
 class MfPipeliner():
     """
@@ -140,6 +141,9 @@ class MfPipeliner():
                 )
             ]
         )
+        # We once wanted to implement this, but it breaks strict tool chain
+        # The responses standard web search tool
+        # responses_search_internet = _Nt("web_search")
         vista_acquire = _Wt(
             name="vista_acquire",
             description=_Bt(
@@ -170,8 +174,8 @@ class MfPipeliner():
                     name="conclusion",
                     type=["string", "null"],
                     description=_Bt(
-                        "总结你获取的信息和对应的推理, 并整理成一到数个简洁的句子, 如'现在是上午九点, 因此适合吃早餐; 且天气凉爽, 因此适合户外活动'. 留空以表示没有值得总结的信息.",
-                        "Conclude information you acquired and corresponding reasoning, into one or several concise and clear sentences, e.g., 'It's 9:00 in the morning, suitable for breakfast; The weather is cool, good for exercising'. Leave empty if no information worths concluding."
+                        "总结你获取信息的有效部分, 并整理成一到数个简洁的句子, 如'现在是上午九点, 因此适合吃早餐; 且天气凉爽, 因此适合户外活动'. 留空以表示没有值得总结的信息.",
+                        "Conclude useful part of information you acquired into one or several concise and clear sentences, e.g., 'It's 9:00 in the morning, suitable for breakfast; The weather is cool, good for exercising'. Leave empty if no information worths concluding."
                     )
                 )
             ]
@@ -191,13 +195,19 @@ class MfPipeliner():
         if self.fsc.maica_settings.extra.mf_const_sf_access < 2:
             tools.append(persistent_acquire)
 
+        # We once wanted to implement this, but it breaks strict tool chain
+        # if (
+        #     int(G.A.MFOCUS_SERP)
+        #     and self.fsc.maica_settings.mf_concl_now
+        # ):
+        #     tools.append(responses_search_internet)
         if providers.get_asearch():
             tools.append(search_internet)
 
         if self._mfocus_impl_mvista:
             tools.append(vista_acquire)
 
-        if self.fsc.maica_settings.extra.mf_llm_concl:
+        if self.fsc.maica_settings.mf_concl_now:
             tools.append(conclude_information)
         else:
             tools.append(agent_finished)
@@ -231,7 +241,7 @@ class MfPipeliner():
             else:
                 org_items = []
 
-            if self.fsc.maica_settings.extra.mf_llm_concl:
+            if self.fsc.maica_settings.mf_concl_now:
                 taskend_word = "作出总结" if target_lang == 'zh' else "draw a conclusion"
             else:
                 taskend_word = "表示任务完成" if target_lang == 'zh' else "indicate task finished"
@@ -241,12 +251,12 @@ class MfPipeliner():
                 _Bt(
 f"""\
 你是一个人工智能助手, 你的任务是调用工具, 以作为角色"莫妮卡"回答用户的问题.
-- 在设定上, 你是用户[player]的女友, 并深爱着对方.
+- 在设定上, 你是用户的女友, 并深爱着对方. 请称呼用户为{{player_name}}.
 最终你应该通过调用工具的方式{taskend_word}. 如果该问题不需要工具, 你可以直接{taskend_word}.\
 """,
 f"""\
 You are a helpful assistant, your task is using tools to respond user's query as charcater "Monika".
-- According to the setting, you're user [player]'s girlfriend, and love them a lot.
+- According to the setting, you're user's girlfriend, and love them a lot. Please call them {{player_name}}.
 Finally you should {taskend_word} with a corresponding tool. If the message does not require tools to answer, you can {taskend_word} directly.\
 """
                 ),
@@ -326,13 +336,23 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
 
                         # We designed all tools to return Tuple[readable_result, actual_values]
                         # Item should not be added to final results if actual_values bool is false.
-                        text, body = await tool(**arguments)
+                        text, body = await tool(**arguments, force_disp=True)
 
-                        # Do not record it for mcore if the tool actually failed
-                        if body:
+                        # Now we have an extending mech
+                        extend_required = False
 
-                            # We can theoretically keep all resps, but that's not useful I think.
-                            # In case that's really necessary, just use mf_llm_concl
+                        if curr_res := tools_results.get(tool_name):
+                            if curr_body := curr_res[1]:
+                                if hasattr(curr_body, "agent_reparse"):
+                                    extend_required = True
+
+                        if extend_required:
+                            if body:
+                                new_body = curr_body + body
+                                new_text = new_body.agent_reparse()
+                                tools_results[tool_name] = (new_text, new_body)
+
+                        else:
                             tools_results[tool_name] = (text, body)
 
                         return text
@@ -429,7 +449,7 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
         return generated_guidance, tools_results
     
     @staticmethod
-    def parse_tools_results(tools_results: dict[str, Tuple[str, Any]]):
+    def parse_tools_results(tools_results: dict[str, Tuple[str, Any]], ignore_empty = False):
         def sort_dict(d: dict, seq: list[str]) -> dict:
             """Sorts keys of dict into given list seq."""
             nd = {}
@@ -457,7 +477,7 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
         cleaned_tools_results = {
             k: v[0]
             for k, v in sorted_tools_results.items()
-            if v[0] and v[1]
+            if v[0] and (v[1] or not ignore_empty)
         }
 
         return cleaned_tools_results
@@ -468,7 +488,7 @@ Finally you should {taskend_word} with a corresponding tool. If the message does
         This wrapping is single-round, fits the actual use case.
         """
         generated_guidance, tools_results = await self._query_response()
-        parsed_results = self.parse_tools_results(tools_results)
+        parsed_results = self.parse_tools_results(tools_results, ignore_empty=True)
 
         self.reset()
         return generated_guidance, parsed_results

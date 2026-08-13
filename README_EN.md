@@ -3,9 +3,9 @@
 <img src="https://maica.monika.love/assets/maica-mtts-finish-p.png" width=150>
 </div>
 
-***
-
 <p align="center"><a href="/README.md">中文</a> | English</p>
+
+***
 
 This is the index page of MAICA, you are now at MAICA backend repo.
 
@@ -13,25 +13,48 @@ Full instructions of MAICA can be found at https://maica.monika.love/.
 
 Quickstarting and terms are at https://maica.monika.love/tos.
 
+***
+
+MAICA Submod frontend repository is https://github.com/Mon1-innovation/MAICA_ChatSubmod.
+
+MAICA-MTTS Submod frontend repository is https://github.com/Mon1-innovation/MAICA_MttsSubmod.
+
+***
+
 MAICA backend repository is https://github.com/Mon1-innovation/MAICA.
 
 MAICA backend compact branch repository is https://github.com/Mon1-innovation/MAICA_Server_Submod.
 
-MAICA Submod frontend repository is https://github.com/Mon1-innovation/MAICA_ChatSubmod.
-
-LIA branch of MAICA core model is at https://huggingface.co/edgeinfinity/MAICAv0-LIA-72B.
-
-LOA branch of MAICA core model is at https://huggingface.co/edgeinfinity/MAICAv0-LOA-7B.
-
-MAICA-MTTS Submod frontend repository is https://github.com/Mon1-innovation/MAICA_MttsSubmod.
-
 MAICA-MTTS repository is https://github.com/Mon1-innovation/MAICA_MTTS.
 
-MAICA-MTTS model is at https://huggingface.co/edgeinfinity/MTTSv0-VoiceClone.
+***
 
-Basic datasets of MAICA are at https://huggingface.co/datasets/edgeinfinity/MAICA_ds_basis.
+LOA branch of MAICA core model:
+- MAICAv0-LOA6-7B-Instruct: https://huggingface.co/edgeinfinity/MAICAv0-LOA-7B
+
+LIA branch of MAICA core model:
+- MAICAv0-LIA6-72B-Instruct: https://huggingface.co/edgeinfinity/MAICAv0-LIA-72B
+
+DAA branch of MAICA core model:
+- MAICAv1-DAA4L-14B-Instruct: https://huggingface.co/edgeinfinity/MAICAv1-DAA4L-14B-Instruct
+- MAICAv1-DAA4L-14B-Instruct-GGUF: https://huggingface.co/edgeinfinity/MAICAv1-DAA4L-14B-Instruct-GGUF
+- MAICAv0-DAA1-72B-Instruct: Not public
+- MAICAv0-DAA2-72B-Instruct: Not public
+- MAICAv1-DAA3-235B-A22B-Instruct: Not public
+- MAICAv1-DAA4-397B-A17B-Instruct: Not public
+
+MAICA-MTTS model:
+- MTTSv0-VoiceClone: https://huggingface.co/edgeinfinity/MTTSv0-VoiceClone
+- MTTSv1-VoiceClone: https://huggingface.co/edgeinfinity/MTTSv1-VoiceClone
+
+Basic datasets of MAICA: 
+- https://huggingface.co/datasets/edgeinfinity/MAICA_ds_basis
+
+***
 
 MAICA related documents are at https://github.com/Mon1-innovation/MAICA/tree/main/document.
+
+***
 
 > Anything below this point is written by AI.
 
@@ -56,4 +79,4 @@ python -m pytest -q
 python -m ruff check maica tests examples
 ```
 
-Scripts in `examples/` are manual integration checks requiring real external services. Public deployments should terminate TLS at a reverse proxy, prefer the HTTP `Authorization: Bearer` header, protect `maica/keys/prv.key`, verify NVWatcher SSH host keys, and configure `MAICA_VISION_HOST_ALLOWLIST`.
+Scripts in `examples/` are manual integration checks requiring real external services. Public deployments should terminate TLS at a reverse proxy, prefer the HTTP `Authorization: Bearer` header, protect `maica/keys/prv.key`, verify NVWatcher SSH host keys, and configure the hostname/IP/CIDR rules in `MAICA_MVISTA_TRUSTED`.
