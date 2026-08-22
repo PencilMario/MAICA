@@ -308,11 +308,17 @@ class FscUsersFuncMixin():
                         status="maica_login_tos_unaccepted",
                     )
 
-        # Only assign these if not common check
-        if service_only or crid_b64:
+        # Only assign these on the initial authentication.  Service-only mode
+        # has no credential validation on the common per-request login check,
+        # so repeated calls must reuse the identity already locked into the
+        # connection instead of assigning it again.
+        verification = self.rsc.maica_settings.verification
+        assign_identity = bool(crid_b64) or (
+            service_only and verification._user_id is None
+        )
+        if assign_identity:
 
             # We should be all set
-            verification = self.rsc.maica_settings.verification
             (
                 verification.user_id,
                 verification.username,

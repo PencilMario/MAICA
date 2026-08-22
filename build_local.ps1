@@ -1,6 +1,7 @@
 param(
     [switch]$Clean,
-    [switch]$UseZig
+    [switch]$UseZig,
+    [string]$PythonPath
 )
 
 # Color output functions
@@ -29,7 +30,31 @@ function Check-Python {
     Write-Info "Checking Python installation..."
 
     try {
-        $pythonVersion = python --version 2>&1
+        if (-not $PythonPath) {
+            $candidates = @(
+                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+                (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+                "python"
+            )
+            $PythonPath = $candidates | Where-Object {
+                if ($_ -eq "python") { $true } else { Test-Path $_ }
+            } | Select-Object -First 1
+        }
+
+        if (-not $PythonPath) {
+            throw "Python 3.12+ was not found"
+        }
+
+        $resolvedPython = (Get-Command $PythonPath -ErrorAction SilentlyContinue).Source
+        if (-not $resolvedPython -and (Test-Path $PythonPath)) {
+            $resolvedPython = (Resolve-Path $PythonPath).Path
+        }
+        if (-not $resolvedPython) {
+            throw "Python executable not found: $PythonPath"
+        }
+        $script:PythonPath = $resolvedPython
+
+        $pythonVersion = & $script:PythonPath --version 2>&1
         Write-Success "Python found: $pythonVersion"
 
         # Extract version number
@@ -37,10 +62,11 @@ function Check-Python {
             $version = [version]$matches[1]
 
             if ($version -ge [version]"3.13") {
-                Write-Info "Python 3.13+ detected - using Zig compiler"
+                Write-Warning-Custom "Python 3.13+ is not the recommended Nuitka onefile runtime for MAICA; prefer Python 3.12"
                 $script:UseZigCompiler = $true
             } elseif ($version -ge [version]"3.12") {
                 Write-Success "Python version is compatible"
+                $script:UseZigCompiler = $true
             } else {
                 Write-Warning-Custom "Python version may not be 3.12+: $pythonVersion"
             }
@@ -59,7 +85,7 @@ function Install-Dependencies {
 
     try {
         Write-Info "Installing requirements.txt..."
-        python -m pip install -r requirements.txt
+        & $script:PythonPath -m pip install -r requirements.txt
         if ($LASTEXITCODE -ne 0) {
             Write-Error-Custom "Failed to install requirements.txt"
             exit 1
@@ -67,7 +93,7 @@ function Install-Dependencies {
         Write-Success "requirements.txt installed"
 
         Write-Info "Installing additional packages for MAICA..."
-        python -m pip install python-magic-bin packaging
+        & $script:PythonPath -m pip install python-magic-bin packaging pymilvus
         if ($LASTEXITCODE -ne 0) {
             Write-Error-Custom "Failed to install additional packages"
             exit 1
@@ -75,7 +101,7 @@ function Install-Dependencies {
         Write-Success "Additional packages installed"
 
         Write-Info "Installing requirements_2.txt..."
-        python -m pip install -r requirements_2.txt
+        & $script:PythonPath -m pip install -r requirements_2.txt
         if ($LASTEXITCODE -ne 0) {
             Write-Error-Custom "Failed to install requirements_2.txt"
             exit 1
@@ -83,7 +109,7 @@ function Install-Dependencies {
         Write-Success "requirements_2.txt installed"
 
         Write-Info "Installing Nuitka..."
-        python -m pip install nuitka
+        & $script:PythonPath -m pip install nuitka
         if ($LASTEXITCODE -ne 0) {
             Write-Error-Custom "Failed to install Nuitka"
             exit 1
@@ -101,7 +127,7 @@ function Verify-Nuitka {
     Write-Info "Verifying Nuitka installation..."
 
     try {
-        $nuitkaInfo = python -m pip show nuitka 2>&1
+        $nuitkaInfo = & $script:PythonPath -m pip show nuitka 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Nuitka is installed and ready"
         } else {
@@ -141,12 +167,20 @@ function Build-MAICA {
 
     try {
         $nuitkaCmd = @(
-            "python", "-m", "nuitka",
+            $script:PythonPath, "-m", "nuitka",
             "--onefile",
             "--include-package=websockets",
             "--include-package=magic",
             "--include-package=packaging",
+            "--include-package=lancedb",
+            "--include-package=lance_namespace",
+            "--include-package=pyarrow",
+            "--include-package=pymilvus",
             "--include-package-data=magic",
+            "--include-data-files=maica/env_basis=env_basis",
+            "--nofollow-import-to=maica.Lib",
+            "--nofollow-import-to=maica.test_module",
+            "--assume-yes-for-downloads",
             "--output-dir=build"
         )
 
@@ -178,7 +212,7 @@ function Build-Register {
 
     try {
         $nuitkaCmd = @(
-            "python", "-m", "nuitka",
+            $script:PythonPath, "-m", "nuitka",
             "--onefile",
             "--output-dir=build"
         )
@@ -203,6 +237,21 @@ function Build-Register {
         Write-Error-Custom "Error building Register: $_"
         exit 1
     }
+}
+
+# Prepare files that MAICA intentionally keeps next to the executable.
+function Prepare-RuntimeFiles {
+    Write-Info "Preparing runtime files..."
+    $runtimeDir = Join-Path (Get-Location).Path "build"
+    $envSource = Join-Path (Get-Location).Path "maica\env_basis"
+    $envTarget = Join-Path $runtimeDir "env_basis"
+
+    if (-not (Test-Path $envSource)) {
+        Write-Error-Custom "Runtime file not found: $envSource"
+        exit 1
+    }
+    Copy-Item -LiteralPath $envSource -Destination $envTarget -Force
+    Write-Success "Prepared runtime file: $envTarget"
 }
 
 # Verify executables
@@ -231,6 +280,30 @@ function Verify-Executables {
         exit 1
     }
 
+    Write-Info "Running MAICA startup smoke test in an isolated distribution directory..."
+    $smokeDir = Join-Path $env:TEMP "maica-starter-smoke-$PID"
+    $smokeOut = Join-Path $smokeDir "stdout.txt"
+    $smokeErr = Join-Path $smokeDir "stderr.txt"
+    Remove-Item $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $smokeDir | Out-Null
+    Copy-Item -LiteralPath (Resolve-Path $maicaExe).Path -Destination (Join-Path $smokeDir "maica_starter.exe")
+    Copy-Item -LiteralPath (Join-Path (Get-Location).Path "build\env_basis") -Destination (Join-Path $smokeDir "env_basis")
+    $smoke = Start-Process -FilePath (Join-Path $smokeDir "maica_starter.exe") -ArgumentList "-t", "print" `
+        -WorkingDirectory $smokeDir -RedirectStandardOutput $smokeOut `
+        -RedirectStandardError $smokeErr -PassThru
+    if (-not $smoke.WaitForExit(30000)) {
+        Stop-Process -Id $smoke.Id -Force -ErrorAction SilentlyContinue
+        Write-Error-Custom "MAICA startup smoke test timed out"
+        exit 1
+    }
+    if ($smoke.ExitCode -ne 0) {
+        Write-Error-Custom "MAICA startup smoke test failed (exit $($smoke.ExitCode))"
+        if (Test-Path $smokeOut) { Get-Content -Raw $smokeOut }
+        if (Test-Path $smokeErr) { Get-Content -Raw $smokeErr }
+        exit 1
+    }
+    Write-Success "MAICA startup smoke test passed"
+
     Write-Success "All executables verified successfully"
 }
 
@@ -248,6 +321,7 @@ function Main {
     }
 
     Check-Python
+    Write-Info "Using build interpreter: $script:PythonPath"
 
     if ($Clean) {
         Write-Info "Clean build requested"
@@ -258,6 +332,7 @@ function Main {
     Verify-Nuitka
     Build-MAICA
     Build-Register
+    Prepare-RuntimeFiles
     Verify-Executables
 
     Write-Host ""

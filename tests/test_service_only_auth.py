@@ -88,6 +88,17 @@ def test_service_only_creates_fixed_confirmed_account_once():
     asyncio.run(scenario())
 
 
+def test_service_only_reuses_identity_on_repeated_login():
+    async def scenario():
+        async with service_only_database():
+            connection = FullSocketsContainer()
+
+            await connection.login("initial-token")
+            assert await connection.login() is True
+
+    asyncio.run(scenario())
+
+
 def test_service_only_concurrent_first_login_converges_on_one_account(tmp_path):
     async def scenario():
         database = tmp_path / "service-only.sqlite3"
