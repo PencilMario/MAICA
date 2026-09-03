@@ -93,7 +93,7 @@ from .llm_utils import ToolCall, llm_request
 from .stream_buffer import StreamBuffer, no_lock_acquire_buffer, acquire_buffer, buffers_gc
 from .ws_config import WsPermissionConfig, WsPingConfig, WsSPingConfig, WsReconnConfig, WsSettingsConfig, WsQueryConfig, Stage1Settings, Stage2Settings
 from .database_utils import DatabaseUtils, dispose_database_engines, sqla_get_or_create, sqla_create_or_update
-from .database_models import SqlBaseAuth, SqlBaseData, SqlUser, SqlAccountStatus, SqlChatSession, SqlCropArchived, SqlCsessionArchived, SqlMsCache, SqlMvMeta, SqlPersistent, SqlTrigger, SqlVectorReference
+from .database_models import SqlBaseAuth, SqlBaseData, SqlUser, SqlAccountStatus, SqlChatSession, SqlCropArchived, SqlCsessionArchived, SqlMsCache, SqlMvMeta, SqlPersistent, SqlTrigger
 from .terms_utils import check_terms_acceptance, parse_tos_ids
 from .users_utils import FscUsersFuncMixin
 from .session_mgr import SessionPersistent, SessionTrigger, acquire_dbo, acquire_session, dbos_gc
@@ -221,7 +221,7 @@ __all__ = [
     'buffers_gc',
     'WsPermissionConfig', 'WsPingConfig', 'WsSPingConfig', 'WsReconnConfig', 'WsSettingsConfig', 'WsQueryConfig', 'Stage1Settings', 'Stage2Settings',
     'SqlBaseAuth', 'SqlBaseData', 'DatabaseUtils', 'dispose_database_engines', 'sqla_get_or_create', 'sqla_create_or_update',
-    'SqlUser', 'SqlAccountStatus', 'SqlChatSession', 'SqlCropArchived', 'SqlCsessionArchived', 'SqlMsCache', 'SqlMvMeta', 'SqlPersistent', 'SqlTrigger', 'SqlVectorReference',
+    'SqlUser', 'SqlAccountStatus', 'SqlChatSession', 'SqlCropArchived', 'SqlCsessionArchived', 'SqlMsCache', 'SqlMvMeta', 'SqlPersistent', 'SqlTrigger',
     'check_terms_acceptance', 'parse_tos_ids',
     'FscUsersFuncMixin',
 ]

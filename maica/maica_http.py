@@ -347,7 +347,7 @@ class ShortConnHandler(View):
                 self.fsc.maica_settings.basic.target_lang = target_lang
 
             await persistent.to_db(skip_sync=True)
-            await persistent.to_vector()
+            await persistent.to_vector_store()
  
         return jfy_res()
     
@@ -364,7 +364,7 @@ class ShortConnHandler(View):
         async with acquire_dbo("persistent", self.fsc) as persistent:
             persistent.clear()
             await persistent.to_db(skip_sync=True)
-            await persistent.to_vector(_data=[])
+            await persistent.to_vector_store(_data=[])
  
         return jfy_res()
         

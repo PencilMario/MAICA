@@ -12,7 +12,7 @@ from .users_utils import FscUsersFuncMixin
 
 class ConnSocketsContainer(AllowArb):
     """Why so many connections."""
-    vector_pool: Optional[MilvusDbConnectionManager]=None
+    vector_pool: Optional[LanceVectorStore]=None
     mcore_conn: Optional[AiConnectionManager]=None
     mfocus_conn: Optional[AiConnectionManager]=None
     mvista_conn: Optional[AiConnectionManager]=None
@@ -63,7 +63,7 @@ class FullSocketsContainer(FscUsersFuncMixin, AllowArb):
     # Discarded, do not use
     # miscellaneous: dict = field(default_factory=lambda: {})
 
-    vector_pool: ClassVar[Optional[MilvusDbConnectionManager]]
+    vector_pool: ClassVar[Optional[LanceVectorStore]]
     mcore_conn: ClassVar[Optional[AiConnectionManager]]
     mfocus_conn: ClassVar[Optional[AiConnectionManager]]
     mvista_conn: ClassVar[Optional[AiConnectionManager]]

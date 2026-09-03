@@ -6,7 +6,6 @@ from typing import *
 
 
 from sqlalchemy import (
-    Index,
     UniqueConstraint,
     JSON,
     Boolean,
@@ -147,14 +146,3 @@ class SqlTrigger(SqlBaseData):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
-class SqlVectorReference(SqlBaseData):
-    __tablename__ = "vector_references"
-    __table_args__ = (
-        Index("ix_vector_references_content_hash", "content_hash"),
-    )
-
-    user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
-    chat_session_num: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
-    content_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-

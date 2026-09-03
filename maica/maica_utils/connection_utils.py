@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import aiomysql
 import aiosqlite
-import pymilvus
 import asyncio
 import functools
 import openai
 import traceback
 import json
+import os
 
 from typing import *
 from typing_extensions import deprecated
@@ -20,57 +20,10 @@ from .maica_utils import *
 from .setting_utils import *
 from .fsc_early import *
 from .locater import *
-from .connection_mixin import MilvusSearchMixin
+from .vector_store import LanceVectorStore
 
 def pkg_init_connection_utils():
     pass
-
-
-class MilvusDbConnectionManager(AsyncCreator, MilvusSearchMixin):
-    """The vector db. We write it here since it's still db."""
-
-    db_type = 'milvus'
-
-
-    def __init__(self, db, host, user, password, ro=False):
-        self.db: str = db
-        """Or shall we call it collection"""
-        self.host = host
-        """File or url"""
-        self.user, self.password = user, password
-        """Won't be used if Milvus lite"""
-        self.ro = ro
-        self.name = self.db
-        self.pool: pymilvus.AsyncMilvusClient = None
-        """It ain't pool, we just calling it one."""
-        self._write_lock = asyncio.Lock()
-
-
-    async def _ainit(self):
-        """Initialize Milvus connection."""
-
-        await self.close()
-        self.pool = pymilvus.AsyncMilvusClient(
-            uri=self.host,
-            user=self.user,
-            password=self.password,
-        )
-
-        try:
-            await self.pool.load_collection(collection_name=self.db)
-        except Exception as e:
-            sync_messenger(info=f"{self.db} collection cannot be loaded: {str(e)}, this is only normal in migrations", type=MsgType.WARN)
-
-
-    def __getattr__(self, k):
-        return getattr(self.pool, k)
-
-
-    async def close(self):
-        """Close Milvus connection."""
-        try:
-            await self.pool.close()
-        except Exception:...
 
 
 class AiConnectionManager(AsyncCreator):
@@ -272,17 +225,23 @@ class ConnUtils():
     """Just a wrapping for functions."""
 
     @staticmethod
-    async def vector_pool() -> MilvusDbConnectionManager | pymilvus.AsyncMilvusClient | None:
-        if not G.A.MILVUS_ADDR:
+    async def vector_pool() -> LanceVectorStore | None:
+        path = G.A.VECTOR_DB_PATH
+        if not path:
             return None
-        host = get_inner_path(G.A.MILVUS_ADDR) if ExplainUrl(G.A.MILVUS_ADDR).is_local else G.A.MILVUS_ADDR
-        return await MilvusDbConnectionManager.async_create(
-            db=G.A.MILVUS_COLL,
-            host=host,
-            user=G.A.MILVUS_USER,
-            password=G.A.MILVUS_PASSWORD,
-            ro=False,
-        )
+        if ExplainUrl(path).is_local and not os.path.isabs(path):
+            path = get_inner_path(path)
+        try:
+            return await LanceVectorStore.async_create(
+                path,
+                dimensions=int(G.A.EMBEDDING_DIMS),
+            )
+        except Exception as exc:
+            sync_messenger(
+                info=f"LanceDB initialization failed; RAG disabled: {exc}",
+                type=MsgType.ERROR,
+            )
+            return None
 
     @staticmethod
     async def mcore_conn():
