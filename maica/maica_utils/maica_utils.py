@@ -570,16 +570,18 @@ class GenCorrectionModel(BaseModel):
                     repaired,
                     **kwargs,
                 )
-            except ValidationError as ve:
 
+            # There could be ValueError and other stuff raised in _repair_json
+            # We also want to include those to ensure final procedures
+            except Exception as e:
                 if default := cls._default_resp:
-                    sync_messenger(info=f"Basic fixes still failed for LLM response: {str(ve)}, returning default", type=MsgType.WARN)
+                    sync_messenger(info=f"Basic fixes still failed for LLM response: {str(e)}, returning default", type=MsgType.WARN)
                     return super().model_validate(
                         default,
                         **kwargs,
                     )
                 else:
-                    raise MaicaResponseWarning(f"Basic fixes still failed for LLM response: {str(ve)}, no default provided") from ve
+                    raise MaicaResponseWarning(f"Basic fixes still failed for LLM response: {str(e)}, no default provided") from ve
 
     @classmethod
     def _repair_json(cls, raw: str | bytes) -> dict[str, Any]:
@@ -972,6 +974,8 @@ def sync_messenger(
 
         if not info:
             info = f"Auto exception from unified exception: {str(error)}"
+        else:
+            info += str(error)
 
         new_error = ce_type(info)
         new_error.__cause__ = error
