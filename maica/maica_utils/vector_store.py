@@ -200,5 +200,10 @@ class LanceVectorStore:
         return results
 
     async def close(self):
+        db = self.db
         self.table = None
         self.db = None
+        connection = getattr(db, "_conn", None) if db is not None else None
+        close = getattr(connection, "close", None)
+        if callable(close):
+            await asyncio.to_thread(close)

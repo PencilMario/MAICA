@@ -259,6 +259,27 @@ def test_closed_store_rejects_reads_and_writes(tmp_path) -> None:
     run(scenario())
 
 
+def test_close_releases_underlying_lancedb_connection() -> None:
+    class Connection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Database:
+        def __init__(self) -> None:
+            self._conn = Connection()
+
+    async def scenario() -> None:
+        database = Database()
+        store = LanceVectorStore(database, object(), dimensions=4)
+        await store.close()
+        assert database._conn.closed
+
+    run(scenario())
+
+
 def test_sync_texts_serializes_concurrent_writes(tmp_path) -> None:
     async def scenario() -> None:
         class SlowEmbedding(FakeEmbedding):
