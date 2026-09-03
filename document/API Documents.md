@@ -118,8 +118,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 使用任何websocket库或调试工具, 连接到长连接端点.  
 连接建立时, 你会收到一条通告, 其status为maica_connection_initiated.
 
-* 连接建立通告的content有10%概率会变为特殊句子, 有效地防止了项目显得过于严肃.
 * 连接建立通告是中英双语的, 用"|"分隔.
+> 自v1.3.004后, 该通告的内容改为固定.
 
 ## 登录:
 
@@ -167,6 +167,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
         "session_len_limit": 8192,
 
         "prompt_pname_repl": false,
+        "prompt_monika_nickname": false,
         "prompt_allow_nickname": true,
         "mf_llm_concl": false,
         "mf_sf_access_impl": 1,
@@ -245,11 +246,16 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     + 模型对玩家的名字有实质性理解.
     - 更容易发生表现离群和混乱.
 
+* prompt_monika_nickname: 在prompt中补充莫妮卡的昵称.
+
+    + 模型能理解自身昵称, 即使其与"莫妮卡"可能完全无关.
+    - 更容易发生表现离群和混乱.
+
 * prompt_allow_nickname: 实验性功能, 在prompt中允许模型生成[player_nickname]占位符.
 
     + 更符合MAS的对话风格.
     - 需要一些额外的前端设计.
-    - 这可能会造成意料之外的问题.
+    - 产生的表现可能有轻微差异.
 
 * mf_llm_concl: 要求agent模型生成最终指导, 并替代默认MFocus指导.
 
@@ -347,6 +353,7 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
     * 截至文档编纂时为止, 该功能仅对目标生成语言en有效. 在目标生成语言为zh时, 该功能无法阻止模型错误地使用英文作答.
     * 不同解码后端对regex引导的支持性不同, 可能导致表达式失效或工作异常.
     * 启用该功能可能影响模型的表现, 或导致其它意料之外的问题.
+    - 自v1.3.004.rc2后, 该功能被暂时撤销, 因为其与vllm默认的解码后端(xgrammar)不兼容.
 
 ### 超参数:
 
@@ -392,6 +399,7 @@ agent模型的超参数不受影响, 且不可由用户设置.
 
     * 在此情况下, query应该是一个list而非str.
     * 在此情况下, MFocus将不会介入.
+    * 图片仍必须通过query外层的`vision`字段提供, 不接受上下文条目中内嵌的图片URL或图片内容块.
     * 传入session的总长度不能超过10轮, 总长不能超过16KB. 因此该功能的作用相对受限, 不建议用于一般情况.
 
 * 0: 单轮对话, MAICA不会保管session.
@@ -579,17 +587,19 @@ MAICA长连接有一系列附加功能可用.
 
 `{"type": "指定搜索类型", "sample": 采样广度, "ctg_weight": 类的比权重, "title": "搜索关键词", "use_cache": false}`
 
-* 其中type有五种可选类型, 默认为in_fuzzy_all:
+* 其中type有五种可选类型, 默认为in_precise_category:
 
-    * precise_page: 仅选取与搜索关键词最接近的一个页面, 此时采样广度不生效. 此种类条目不执行递归查找, 响应较快.
+    * precise_page: 直接根据关键词拉取页面, 要求准确匹配, 且采样广度不生效. 此种类条目不执行递归查找, 响应较快.
 
     * fuzzy_page: 根据关键词搜索多个页面, 从中随机抽取一个页面. 此种类条目不执行递归查找, 响应较快.
 
-    * in_precise_category: 先仅选取与搜索关键词最接近的一个分类, 再从其中递归地随机抽取分类或页面, 直至最终抽取到一个页面. 此种类条目响应较慢.
+    * in_precise_category: 直接根据关键词拉取分类, 要求准确匹配, 再从其中递归地随机抽取分类或页面, 直至最终抽取到一个页面. 此种类条目响应速度中等.
 
     * in_fuzzy_category: 根据关键词搜索多个分类, 再从其中递归地随机抽取分类或页面, 直至最终抽取到一个页面. 此种类条目响应较慢.
 
     * in_fuzzy_all: 根据关键词直接开始递归地抽取分类或页面, 直至最终抽取到一个页面. 此种类条目响应较慢.
+
+    > 在v1.3.004后, MSpire搜索类型算法有所改变, 且默认算法由`in_fuzzy_all`变为`in_precise_category`. 实际默认行为保持一致.
 
 * sample: 采样广度, 即模糊搜索时的条目数限制.
 
@@ -606,7 +616,7 @@ MAICA长连接有一系列附加功能可用.
 
 * use_cache: 是否存储和使用缓存, 若命中缓存则直接通过缓存响应. 默认为false.
 
-    * 仅当chat_session为0时use_cache可以使用. 当use_cache设置为true时, 会强制使用默认超参数并固定种子.
+    * 仅当chat_session为0时use_cache可以使用. 当use_cache设置为true时, 基于超参数和用户级prompt修改的功能均不会生效, 例如prompt_pname_repl, prompt_monika_nickname, MFocus相关功能等.
 
 ### 生成MPostal响应:
 
@@ -629,7 +639,7 @@ MAICA长连接有一系列附加功能可用.
 
 在MSpire和MPostal使用详细设置时, 均有以下配置可用:
 
-`{"bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "twk_super": true, "strict_conv": false}`
+`{"bypass_mf": true, "bypass_mt": true, "bypass_stream": true, "twk_super": true, "twk_info": true, "strict_conv": false}`
 
 * bypass_mf: 本轮响应中是否不调用MFocus, 普通对话中为false, MSpire/MPostal默认为true.
 
@@ -637,7 +647,9 @@ MAICA长连接有一系列附加功能可用.
 
 * bypass_stream: 本轮响应是否忽略流式输出. MSpire默认/普通对话中为false, MPostal默认为true.
 
-* twk_super: 本轮响应是否微调超参数和工具表现, 以获取更适合书面语的生成结果. MSpire默认/普通对话中为false, MPostal默认为true.
+* twk_super: 本轮响应是否微调超参数, 以获取更适合书面语的生成结果. MSpire默认/普通对话中为false, MPostal默认为true.
+
+* twk_info: 本轮响应是否微调工具表现, 以提供对静态生成可能有帮助的信息. 普通对话中为false, MSpire/MPostal默认为true.
 
 * strict_conv: 本轮响应是否使用对话格式回答, 反之则使用书面语. MSpire默认/普通对话中为true, MPostal默认为false.
 
@@ -645,9 +657,10 @@ MAICA长连接有一系列附加功能可用.
 
 `{"type": "query", "chat_session": "0", "query": "你能看到图片上有什么吗?", "vision": ["图片链接"]}`
 
-* MVista的实现基于独立VLM, 后端部署不一定有实现. 向未实现MVista的后端发起请求会被忽略.
-* MVista是MFocus的下属模块. 要使用MVista, 你必须启用MFocus.
+* 后端部署不一定实现MVista. 向未实现MVista的后端发起请求会被忽略.
+* 若后端使用工具形式MVista实现, 则MVista需要启用MFocus才能生效.
 * 图片链接只接受绝对HTTP(S) URL. 部署可通过`MAICA_MVISTA_TRUSTED`配置规则, 详见配置注释.
+* 仅接受位于顶层的图片链接.
 
 * 图片链接可以一次上传多个, 但最多不超过后端实例允许保存的上限.
 * 图片链接必须是完整链接, 可以来自后端专用存储或任意网络图床, 必须开放公开下载.
@@ -662,10 +675,12 @@ MAICA长连接有一系列附加功能可用.
 
 `{"type": "ping"}`
 
-服务器会发回一个status为pong的响应.
+服务器会发回一个status为pong的响应, content同连接建立通告.
 
 * 自v1.2.000.rc11后, ping可以在登录前发送.
 * 心跳连接不强制发送, 但可用于连接性和延迟检测等.
+* 连接建立通告是中英双语的, 用"|"分隔.
+* 在登录后发送ping, content有10%概率包含特殊句子, 这也许算是一个彩蛋.
 
 ### 安静心跳连接:
 
@@ -997,8 +1012,8 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 `{"curr_version": "后端当前版本", "legc_version": "兼容的最旧版本", "fe_blessland_version": "Blessland前端的可用最旧版本"}`
 
-* 若前端使用的协议规范旧于通告的最旧版本, 应当停止工作, 以避免意外情况.
-* 未来若对其它前端提供官方支持, 也会加入对应的版本通告.
+* 对于官方支持的前端, 应当优先采纳其对应声明; 对于第三方或未列出的前端, 可以采纳legc_version声明, 以后端协议版本为支持依据.
+* 若前端版本旧于通告的最旧版本, 应当停止工作, 以避免意外情况.
 
 ### 获取模型负载:
 
@@ -1092,10 +1107,10 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
 
 ```
 mas_playername #str
+mas_monikaname #str
 mas_player_bday #tuple["yyyy", "mm", "dd"]
 mas_affection #int
 mas_geolocation #str
-
 mas_player_additions #["[player]喜欢吃寿司.", "[player]喜欢初音未来.", "[player]不喜欢猫"]
 target_lang #Literal["zh", "en", "auto"]
 
@@ -1210,9 +1225,11 @@ _mas_o31_tt_count
 sessions
 ```
 
-其中, 除前六行外均为原版可调用的变量:
+其中, 除第一段外均为原版可调用的变量. 第一段的变量含义如下:
 
 * mas_playername为str格式的玩家名称.
+
+* mas_monikaname为str格式的莫妮卡名称(昵称).
 
 * mas_player_bday为list格式的玩家生日.
 

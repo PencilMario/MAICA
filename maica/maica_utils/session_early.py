@@ -48,6 +48,11 @@ class SessionPersistentMixin():
             v = v or []
             v += (_read_perm(key) or [])
 
+            # We require this being list, since strings are also iterable
+            # We will enforce this check after a grace period
+            if not isinstance(v, list):
+                v = []
+
         elif v is None:
             v = _read_perm(key)
             
@@ -58,8 +63,27 @@ class SessionPersistentMixin():
         """Just an alias."""
         return self.read_key("mas_playername")
 
+    def _read_mname(self, where: Literal['all', 'pers', 'temp'] = 'all') -> Optional[str]:
+        mname = self.read_key("mas_monikaname", where)
+        if mname is not None and not isinstance(mname, str):
+            raise MaicaInputWarning("mas_monikaname must be a string")
+
+        target_lang = self.fsc.maica_settings.basic.target_lang
+        if (
+            (target_lang == 'zh' and mname == "莫妮卡")
+            or (target_lang != 'zh' and mname == "Monika")
+        ):
+            return None
+
+        return mname
+
     @property
-    def pbday(self) -> Optional[Tuple[int, int, int]]:
+    def mname(self) -> Optional[str]:
+        """We add some filtering logics here."""
+        return self._read_mname()
+
+    @property
+    def pbday(self) -> Optional[List[int]]:
         """Just an alias."""
         return self.read_key("mas_player_bday")
 
@@ -107,6 +131,13 @@ class SessionPersistentMixin():
             _ap(
                 f'{{player_name}}的真名是{data1}.',
                 f"{{player_name}}'s real name is {data1}."
+            )
+
+        data1 = self._read_mname(where)
+        if data1:
+            _ap(
+                f'{{player_name}}也会称你为{data1}.',
+                f"{{player_name}} would also call you {data1}."
             )
 
         data1 = _rf('mas_player_bday')

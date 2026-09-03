@@ -2,6 +2,7 @@ import asyncio
 import time
 
 import bcrypt
+import pytest
 import sqlalchemy
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -10,6 +11,7 @@ from maica.maica_utils import (
     DatabaseUtils,
     FullSocketsContainer,
     G,
+    MaicaInputWarning,
     MaicaSession,
     MaicaSessionItem,
     SqlBaseData,
@@ -26,7 +28,7 @@ from maica.maica_utils import (
 from maica.maica_utils import session_mgr, stream_buffer
 from maica.maica_utils.database_utils import ReadOnlySession
 from maica.maica_utils.users_utils import FscUsersFuncMixin
-from maica.initializer.migrations import migration_4, migration_5
+from maica.initializer.migrations import migration_4, migration_5, migration_6
 
 
 def test_create_or_update_flushes_insert_and_updates_existing_row() -> None:
@@ -107,6 +109,58 @@ def test_db_bound_object_loads_blank_text_as_empty_content() -> None:
     assert persistent.content == {}
 
 
+def test_persistent_info_respects_temp_and_persistent_boundaries() -> None:
+    fsc = FullSocketsContainer()
+    fsc.maica_settings.basic.target_lang = "en"
+    persistent = SessionPersistent(fsc=fsc)
+
+    persistent.content = {
+        "mas_playername": "Persistent Player",
+        "mas_monikaname": "Persistent Nickname",
+        "mas_player_bday": [2000, 1, 2],
+        "mas_affection": 100,
+    }
+    temporary_only = "\n".join(persistent.form_info(where="temp"))
+    assert "Persistent Player" not in temporary_only
+    assert "Persistent Nickname" not in temporary_only
+    assert "2000" not in temporary_only
+    assert "new lovers" not in temporary_only
+
+    persistent.content = {}
+    persistent.content_temp = {
+        "mas_playername": "Temporary Player",
+        "mas_monikaname": "Temporary Nickname",
+        "mas_player_bday": [2001, 2, 3],
+        "mas_affection": 200,
+    }
+    persistent_only = "\n".join(persistent.form_info(where="pers"))
+    assert "Temporary Player" not in persistent_only
+    assert "Temporary Nickname" not in persistent_only
+    assert "2001" not in persistent_only
+    assert "harmonious lovers" not in persistent_only
+
+
+def test_temp_info_limit_does_not_count_persistent_basic_fields() -> None:
+    fsc = FullSocketsContainer()
+    persistent = SessionPersistent(fsc=fsc)
+    persistent.content = {"mas_playername": "Persistent Player"}
+    persistent.content_temp = {
+        "mas_player_additions": [f"Temporary item {index}" for index in range(27)]
+    }
+
+    persistent.validate()
+    assert len(persistent.form_info(where="temp")) == 32
+
+
+def test_monika_nickname_rejects_non_string_values() -> None:
+    fsc = FullSocketsContainer()
+    persistent = SessionPersistent(fsc=fsc)
+    persistent.content_temp = {"mas_monikaname": 123}
+
+    with pytest.raises(MaicaInputWarning, match="mas_monikaname must be a string"):
+        _ = persistent.mname
+
+
 def test_dbo_acquire_binds_fsc_only_while_holding_lock() -> None:
     async def scenario() -> None:
         def make_fsc() -> FullSocketsContainer:
@@ -176,9 +230,61 @@ def test_current_schema_migration_is_idempotent_on_sqlite() -> None:
             await migration_4.migrate()
             await migration_5.migrate()
             await migration_5.migrate()
+            await migration_6.migrate()
+            await migration_6.migrate()
         finally:
             DatabaseUtils.engine_data = old_engine
             G.A.VECTOR_DB_PATH = old_vector_path
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_mspire_prompt_migration_adds_nullable_column_without_touching_rows() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        old_engine = DatabaseUtils.engine_data
+        DatabaseUtils.engine_data = engine
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    sqlalchemy.text(
+                        """
+                        CREATE TABLE ms_cache (
+                            spire_id INTEGER PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            hash VARCHAR(255) NOT NULL,
+                            content TEXT,
+                            timestamp DATETIME
+                        )
+                        """
+                    )
+                )
+                await conn.execute(
+                    sqlalchemy.text(
+                        "INSERT INTO ms_cache (spire_id, user_id, hash, content) "
+                        "VALUES (1, 7, 'legacy-hash', 'legacy-content')"
+                    )
+                )
+
+            await migration_6.migrate()
+            await migration_6.migrate()
+
+            async with engine.connect() as conn:
+                columns = await conn.run_sync(
+                    lambda sync_conn: sqlalchemy.inspect(sync_conn).get_columns("ms_cache")
+                )
+                assert [column["name"] for column in columns].count("prompt") == 1
+                row = (
+                    await conn.execute(
+                        sqlalchemy.text(
+                            "SELECT hash, content, prompt FROM ms_cache WHERE spire_id = 1"
+                        )
+                    )
+                ).one()
+                assert tuple(row) == ("legacy-hash", "legacy-content", None)
+        finally:
+            DatabaseUtils.engine_data = old_engine
             await engine.dispose()
 
     asyncio.run(scenario())

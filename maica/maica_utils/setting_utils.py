@@ -179,6 +179,8 @@ class MaicaSettings(BaseModel):
 
         prompt_pname_repl: bool = False
         """Use name from savefile instead of [player] in prompts."""
+        prompt_monika_nickname: bool = False
+        """Add Monika's given nickname to prompt."""
         prompt_allow_nickname: bool = True
         """Allow model to generate [player_nickname]."""
         mf_llm_concl: bool = False
@@ -251,6 +253,7 @@ class MaicaSettings(BaseModel):
 
             class MsFromCacheResult(BaseModel):
                 hash: Optional[str] = None
+                prompt: Optional[str] = None
                 result: Optional[str] = None
 
             type: Literal[
@@ -259,7 +262,7 @@ class MaicaSettings(BaseModel):
                 "in_precise_category",
                 "in_fuzzy_category",
                 "in_fuzzy_all",
-            ] = "in_fuzzy_all"
+            ] = "in_precise_category"
             sample: int = Field(
                 default=250,
                 ge=2,
@@ -313,6 +316,8 @@ class MaicaSettings(BaseModel):
             """Bypass stream output once."""
             twk_super: bool = False
             """Tweak super params (for written language)."""
+            twk_info: bool = False
+            """Tweak mf_const_tools info (for ms and mp)."""
             strict_conv: bool = True
             """Restrict conversation schema."""
 
@@ -375,9 +380,35 @@ class MaicaSettings(BaseModel):
         )
 
     @property
-    def prompt_writable(self):
+    def pname_repl_now(self):
+        return (
+            self.prompt_writable
+            and self.extra.prompt_pname_repl
+        )
+
+    @property
+    def monika_nickname_now(self):
+        return (
+            self.prompt_writable
+            and self.extra.prompt_monika_nickname
+        )
+
+    @property
+    def prompt_system_writable(self):
+        """Allow writing from system level, like zsco."""
         return (
             self.temp.chat_session >= 0
+        )
+
+    @property
+    def prompt_writable(self):
+        """Allow writing from user level and above (system), like mf."""
+        return (
+            self.prompt_system_writable
+            and not (
+                self.temp.activated == "mspire"
+                and self.temp.mspire.use_cache
+            )
         )
     
     @property

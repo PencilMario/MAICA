@@ -86,7 +86,7 @@ class WsCoroutine(NoWsCoroutine):
                     case "sping":
                         pass
                     case "ping":
-                        await self.fsc.messenger("pong", "Ping received from anonymous and responded", 200)
+                        await self.fsc.messenger("pong", get_sentence(common_only=True), 200, no_print=True, no_track=True)
                     case "auth":
                         sync_messenger(info='Received auth request on stage1', type=MsgType.RECV)
                         sync_messenger(info=f'From IP {self.remote_addr}', type=MsgType.DEBUG)
@@ -108,7 +108,7 @@ class WsCoroutine(NoWsCoroutine):
                     raise
                 else:
                     await self.fsc.messenger(error=ce)
-                    # await messenger(websocket, 'maica_loop_warn_finished', 'Loop hit a user level exception, stopped and reset', 304)
+                    await self.fsc.messenger('maica_loop_warn_reset', 'Loop hit a user level exception, reset in stage 2', 400)
                     continue
 
 
@@ -170,7 +170,7 @@ class WsCoroutine(NoWsCoroutine):
                     case "sping":
                         pass
                     case "ping":
-                        await self.fsc.messenger("pong", f"Ping received from {self.settings.verification.username} and responded", 200)
+                        await self.fsc.messenger("pong", get_sentence(), 200, no_print=True, no_track=True)
                     case "reconn":
                         await self.fsc.messenger.exhaust_buffer()
                     case "params":
@@ -221,6 +221,42 @@ class WsCoroutine(NoWsCoroutine):
             raise MaicaInputWarning(f"Settings unacceptable: {str(e)}") from e
         
         await self.fsc.messenger('maica_params_accepted', f"{accepted_params} out of {len(ws_config.chat_params)} settings accepted", 200)
+
+    def _prepare_user_query(self, session: MaicaSession, ws_config: WsQueryConfig):
+        """Apply request-scoped settings and return the actual current user item."""
+        chat_session = ws_config.chat_session
+        user_query = MaicaSessionItem("user")
+        session.append(user_query)
+
+        match ws_config.activated:
+            case "query":
+                if chat_session <= -1:
+                    session.load(ws_config.query)
+                    user_query = session[-1]
+                    str_query = user_query.content
+                else:
+                    str_query = user_query.content = ws_config.query
+
+            case "mspire":
+                self.settings.temp.activated = "mspire"
+                self.settings.temp.mspire.update(ws_config.inspire)
+                self.settings.temp.common.update(ws_config.inspire)
+                str_query = ", ".join(
+                    [to_str(i, self.settings.basic.target_lang) for i in ws_config.inspire.title]
+                )
+
+            case "mpostal":
+                self.settings.temp.activated = "mpostal"
+                self.settings.temp.mpostal.update(ws_config.postmail)
+                self.settings.temp.common.update(ws_config.postmail)
+                str_query = (ws_config.postmail.header or "") + ws_config.postmail.content
+
+        vision_urls = ws_config.vision.root if ws_config.vision else None
+        self.settings.temp.mvista.mv_imgs = vision_urls
+
+        user_query.context_from_fsc(self.fsc)
+
+        return user_query, str_query
 
     # Completion section
     async def generate_response(self, ws_config: WsQueryConfig):
@@ -275,33 +311,10 @@ class WsCoroutine(NoWsCoroutine):
                 )
                 return
 
-            user_query = MaicaSessionItem("user")
-            user_query.context_from_fsc(self.fsc)
-            session.append(user_query)
-
-            match ws_config.activated:
-                case "query":
-                    if chat_session <= -1:
-                        # Overrides it
-                        session.load(ws_config.query)
-                        user_query = session[-1]
-                        str_query = user_query.content
-                    else:
-                        str_query = user_query.content = ws_config.query
-
-                case "mspire":
-                    self.settings.temp.activated = "mspire"
-                    self.settings.temp.mspire.update(ws_config.inspire)
-                    self.settings.temp.common.update(ws_config.inspire)
-                    str_query = ", ".join(
-                        [to_str(i, self.settings.basic.target_lang) for i in ws_config.inspire.title]
-                    )
-
-                case "mpostal":
-                    self.settings.temp.activated = "mpostal"
-                    self.settings.temp.mpostal.update(ws_config.postmail)
-                    self.settings.temp.common.update(ws_config.postmail)
-                    str_query = (ws_config.postmail.header or "") + ws_config.postmail.content
+            user_query, str_query = self._prepare_user_query(
+                session,
+                ws_config,
+            )
 
             # Acquire procedure already clears temp, so write here directly
             if ws_config.savefile:
@@ -310,10 +323,6 @@ class WsCoroutine(NoWsCoroutine):
             if ws_config.triggers:
                 st.content_temp = ws_config.triggers.root
                 st.validate()
-
-            # MVista
-            if ws_config.vision:
-                self.settings.temp.mvista.mv_imgs = ws_config.vision.root
 
             # Query censor
             if G.A.CENSOR_QUERY != '0':
@@ -336,20 +345,25 @@ class WsCoroutine(NoWsCoroutine):
                 st=st,
             )
 
-            # We update str_query here for ms and mp
-            str_query = user_query.content
-
             # Construction part done, communication part started
+            completion_input = session.utilize()
+            # Uncomment this to debug
+            # import json
+            # print(json.dumps(completion_input, ensure_ascii=False, indent=2))
             completion_args = {
-                "input": session.utilize(),
+                "input": completion_input,
                 "stream": self.settings.use_stream_now,
                 "extra_body": {},
             }
+
+            # We update str_query here for ms and mp
+            str_query = user_query.content
 
             # Super params apply
             if self.settings.super_writable:
                 super_args = self.settings.super.model_copy()
 
+                # Decrease prep for writting letters, it's better this way sometimes
                 if self.settings.temp.common.twk_super:
                     super_args.presence_penalty = 1.0 - (1.0 - super_args.presence_penalty) * (2/3)
 
@@ -359,9 +373,9 @@ class WsCoroutine(NoWsCoroutine):
             completion_args.update(super_args.model_dump())
 
             # Enforce lang (guided regex)
-            if self.settings.extra.gen_enforce_lang:
-                if self.settings.basic.target_lang == 'en':
-                    completion_args['extra_body']["structured_outputs"] = {"regex": r"^[^\u4e00-\u9fa5]*$"}
+            # if self.settings.extra.gen_enforce_lang:
+            #     if self.settings.basic.target_lang == 'en':
+            #         completion_args['extra_body']["structured_outputs"] = {"regex": r"^[^\u4e00-\u9fa5]*$"}
 
             # Add context log
             previous_rnds = session.utilize(text_only=True)[1:-1]
@@ -424,7 +438,7 @@ class WsCoroutine(NoWsCoroutine):
 
                         async for content_delta in a_content:
                             await asyncio.sleep(0)
-                            content_delta: Optional[str] = await pprt_processor.store_and_split(content_delta)
+                            content_delta: Optional[str] = await pprt_processor.stack_and_split(content_delta)
                             if content_delta:
                                 await send_delta(content_delta)
 
@@ -442,8 +456,10 @@ class WsCoroutine(NoWsCoroutine):
 
                 # If skipping generation, we get result from skip_generation and just send it
                 else:
+                    content_all_deltas = await pprt_processor.exhaust_and_split(self.settings.skip_generation)
 
-                    await send_delta(self.settings.skip_generation)
+                    for content_delta in content_all_deltas:
+                        await send_delta(content_delta)
 
                     sync_messenger(info='\n', type=MsgType.PLAIN)
                     await self.fsc.messenger(
@@ -498,13 +514,12 @@ async def main_logic(
         try:
 
             # This tiny welcome
-            sentence_of_the_day = SentenceOfTheDay().get_sentence()
             await fsc.messenger(
                 'maica_connection_initiated',
-                sentence_of_the_day,
+                get_sentence(common_only=True),
                 200,
-                type=MsgType.INFO,
                 no_print=True,
+                no_track=True,
             )
 
             coro_instance = await WsCoroutine.async_create(
@@ -649,7 +664,7 @@ async def prepare_thread(**kwargs):
     # Generic model helper init here
     if G.A.MCORE_GENERIC and int(G.A.MCORE_GENERIC):
         try:
-            mtools.generic.generic_helper = await mtools.GenericModelHelper.async_create(csc=root_csc)
+            mtools.zsco.generic_helper = await mtools.GenericModelHelper.async_create(csc=root_csc)
         except Exception as e:
             sync_messenger(info=f"Mcore generic enabled but failed to spawn helper: {str(e)}, will proceed with limited function set", type=MsgType.WARN)
     

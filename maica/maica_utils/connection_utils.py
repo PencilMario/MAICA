@@ -118,6 +118,63 @@ class AiConnectionManager(AsyncCreator):
         self.gen_kwargs = kwargs
 
 
+    def completions_to_responses(self, **kwargs) -> dict[str, Any]:
+        """Build the keyword arguments passed to ``responses.create``."""
+        kwargs["model"] = self.model_actual
+        mixed_exbody = self.gen_kwargs.get("extra_body", {}) | kwargs.get("extra_body", {})
+        mixed_kwargs = self.gen_kwargs | kwargs
+        mixed_kwargs["extra_body"] = mixed_exbody
+
+        # Parameters unsupported by the Responses SDK are sent through extra_body.
+        for lower_sampling_param in (
+            "seed",
+            "frequency_penalty",
+            "presence_penalty",
+        ):
+            if lower_sampling_param in mixed_kwargs:
+                mixed_kwargs["extra_body"][lower_sampling_param] = mixed_kwargs.pop(lower_sampling_param)
+
+        if "max_tokens" in mixed_kwargs:
+            mixed_kwargs["max_output_tokens"] = mixed_kwargs.pop("max_tokens")
+
+        messages = mixed_kwargs.get("input")
+        if (
+            isinstance(messages, list)
+            and messages
+            and messages[0]["role"] == "system"
+        ):
+            messages = messages.copy()
+            system = messages.pop(0)
+            mixed_kwargs["input"] = messages
+            mixed_kwargs["instructions"] = system["content"]
+
+        return mixed_kwargs
+
+
+    def completions_to_request_body(self, **kwargs) -> dict[str, Any]:
+        """
+        Build the JSON body ultimately sent to the Responses endpoint.
+        Notice: This is a debugging function, not used normally.
+        """
+        request_kwargs = self.completions_to_responses(**kwargs)
+        extra_body = request_kwargs.pop("extra_body", {})
+
+        # These are OpenAI SDK request options rather than JSON body fields.
+        for option_name in ("extra_headers", "extra_query", "timeout"):
+            request_kwargs.pop(option_name, None)
+
+        request_kwargs.update(extra_body)
+        return request_kwargs
+
+
+    async def _time_counter(self):
+        time_elps = 0
+        while True:
+            await asyncio.sleep(5)
+            time_elps += 5
+            sync_messenger(info=f"A response from {self.model_actual} has delayed for over {time_elps}s", type=MsgType.WARN)
+
+
     async def make_completion(self, swallow: Union[bool, str]=False, **kwargs) -> Response | AsyncStream[ResponseStreamEvent]:
         """
         Makes completion with arguments.
@@ -127,45 +184,17 @@ class AiConnectionManager(AsyncCreator):
         if "completion" not in self.caps:
             raise MaicaResponseError("Connected model is not capable of completion")
 
-        kwargs.update(
-            {
-                "model": self.model_actual
-            }
-        )
-        mixed_exbody = self.gen_kwargs.get('extra_body', {}) | kwargs.get('extra_body', {})
-        mixed_kwargs = self.gen_kwargs | kwargs
-        mixed_kwargs['extra_body'] = mixed_exbody
-
-        # The response patch
-        # Idiot openai
-        for lower_sampling_param in (
-            "seed",
-            "frequency_penalty",
-            "presence_penalty",
-        ):
-            if lower_sampling_param in mixed_kwargs:
-                mixed_kwargs['extra_body'][lower_sampling_param] = mixed_kwargs.pop(lower_sampling_param)
-            
-        # Alter names
-        if "max_tokens" in mixed_kwargs:
-            mixed_kwargs["max_output_tokens"] = mixed_kwargs.pop("max_tokens")
-
-        # Flattern system
-        messages = mixed_kwargs.get("input")
-        if (
-            isinstance(messages, list)
-            and messages
-            and messages[0]["role"] == "system"
-        ):
-            system = messages.pop(0)
-            mixed_kwargs["instructions"] = system["content"]
+        mixed_kwargs = self.completions_to_responses(**kwargs)
 
         # Uncomment to debug
         # print(json.dumps(mixed_kwargs, ensure_ascii=False))
 
         try:
             task_stream_resp = asyncio.create_task(self.client.responses.create(**mixed_kwargs))
+            task_time_counter = asyncio.create_task(self._time_counter())
+
             await asyncio.wait_for(task_stream_resp, timeout=int(G.A.OPENAI_TIMEOUT) if G.A.OPENAI_TIMEOUT != '0' else None)
+
             resp = task_stream_resp.result()
 
         except openai.InternalServerError as oe:
@@ -176,6 +205,9 @@ class AiConnectionManager(AsyncCreator):
                 fake_text = swallow if isinstance(swallow, str) else 'null'
                 resp = FakeChatCompletion(fake_text)
                 sync_messenger(info=f"Swallowed OpenAI api exception: {str(oe)}, returning default: {fake_text}")
+                
+        finally:
+            task_time_counter.cancel()
 
         return resp
     

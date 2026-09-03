@@ -10,7 +10,7 @@ from typing import *
 
 from .mfocus_llm import MfPipeliner
 from .agent_modules import AgentTools
-from maica.mtools import make_postmail, make_inspire, ms_from_cache, generic
+from maica.mtools import make_postmail, make_inspire, ms_from_cache, zsco
 from maica.maica_utils import *
 
 _Bt = BilingualText
@@ -28,11 +28,17 @@ async def pre_core_pipelines(
     async def name_repl_pipeline():
         """Simple pipeline to assign real name if required."""
         # prompt_pname_repl implementation
-        if fsc.maica_settings.extra.prompt_pname_repl:
+        if fsc.maica_settings.pname_repl_now:
             pname = sp.pname
             if pname:
                 sync_messenger(info=f"Using pname {pname} due to prompt_pname_repl", type=MsgType.DEBUG)
                 session_item.context.player_name = pname
+        # prompt_monika_nickname implementation
+        if fsc.maica_settings.monika_nickname_now:
+            mname = sp.mname
+            if mname:
+                sync_messenger(info=f"Adding mname {mname} due to prompt_monika_nickname", type=MsgType.DEBUG)
+                session_item.context.monika_nickname = mname
 
 
     async def mf_pipeline():
@@ -101,13 +107,18 @@ async def pre_core_pipelines(
             fsc.maica_settings.temp.activated == "mspire"
         ):
             prompt_text = await make_inspire(fsc)
-            prompt_text = prompt_text.to_str(fsc.maica_settings.basic.target_lang).format_map(
-                SafeFormatDict({"player_name": session_item.context.player_name})
+            prompt_text = replace_prompt_placeholders(
+                prompt_text.to_str(fsc.maica_settings.basic.target_lang),
+                {"player_name": session_item.context.player_name},
             )
             session_item.content = prompt_text
 
             # MSpire has cache mechs
-            if fsc.maica_settings.temp.mspire.use_cache:
+            if (
+                fsc.maica_settings.temp.mspire.use_cache
+                # We disable cache in multi-rounds
+                and not len(session) > 2
+            ):
                 mfc_m = await ms_from_cache(prompt_text, fsc)
                 fsc.maica_settings.temp.mspire._mfc_m = mfc_m
 
@@ -130,17 +141,24 @@ async def pre_core_pipelines(
 
             toolbox = AgentTools(fsc, sp)
 
+            # Tweak mf_const_tools level if twk_info should be applied
+            # The datetime and possibly weather will be useful for MP and MS, especially when they don't actively call tools by default
+            if fsc.maica_settings.temp.common.twk_info:
+                mf_const_tools = max(mf_const_tools, 2)
+
             if mf_const_tools >= 1:
 
                 sync_messenger(info="MFocus calling mf_const_tools level 1", type=MsgType.DEBUG)
                 for tool_name in ("time_acquire", "event_acquire"):
-                    tools_results[tool_name] = await getattr(toolbox, tool_name)()
+                    # By this const param, we mark this tool query is sent by mf_const_tools which may affect tools' behavior
+                    # All mf tools are enforced to accept **kwrags, so this is fine even when it does nothing
+                    tools_results[tool_name] = await getattr(toolbox, tool_name)(const=True)
 
             if mf_const_tools >= 2:
 
                 sync_messenger(info="MFocus calling mf_const_tools level 2", type=MsgType.DEBUG)
                 for tool_name in ("date_acquire", "weather_acquire"):
-                    tools_results[tool_name] = await getattr(toolbox, tool_name)()
+                    tools_results[tool_name] = await getattr(toolbox, tool_name)(const=True)
 
             if (
                 mf_const_sf_access >= 1
@@ -148,11 +166,15 @@ async def pre_core_pipelines(
             ):
                 sync_messenger(info="MFocus calling mf_const_sf_access", type=MsgType.DEBUG)
                 tool_name = "persistent_acquire"
-                text, body = await getattr(toolbox, tool_name)(query=session_item.content)
+                text, body = await getattr(toolbox, tool_name)(query=session_item.content, const=True)
                 
                 sync_messenger(info=f"MFocus mf_const_sf_access responded: {text}", type=MsgType.INFO)
                 tools_results[tool_name] = (text, body)
 
+            # Why we keep empty here:
+            # In short terms, to prevent MFocus calling known-already info again, even if the answer is "there's no".
+            # At the end of mf_pipeline, another parse_tools_results is run but ignore_empty = True.
+            # This way only MFocus model gains a full glance of negative info, core model's prompt still keeps concise.
             parsed_results = MfPipeliner.parse_tools_results(tools_results, ignore_empty=False)
             session_item.context.known_info.update(parsed_results)
 
@@ -165,10 +187,10 @@ async def pre_core_pipelines(
     async def generic_helper_pipeline():
         """Utilizes RAG to search datasets for zero-shot like learning for generic core model."""
         if (
-            fsc.maica_settings.prompt_writable
-            and generic.generic_helper
+            fsc.maica_settings.prompt_system_writable
+            and zsco.generic_helper
         ):
-            res_set = await generic.generic_helper.search(session_item.content)
+            res_set = await zsco.generic_helper.search(session_item.content)
             session_item.context.generic_help = list(res_set)
 
 

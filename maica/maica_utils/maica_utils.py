@@ -521,6 +521,18 @@ class SafeFormatDict(dict):
         return "{" + key + "}"
 
 
+_PROMPT_PLACEHOLDER_RE = re.compile(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})")
+
+
+def replace_prompt_placeholders(text: str, values: Mapping[str, object]) -> str:
+    """Replace known simple placeholders without parsing arbitrary brace content."""
+    return _PROMPT_PLACEHOLDER_RE.sub(
+        lambda match: str(values[match.group(1)])
+        if match.group(1) in values else match.group(0),
+        text,
+    )
+
+
 class GenCorrectionModel(BaseModel):
     """
     Pydantic model with lightweight JSON output repair. GPT wrote this.
@@ -959,14 +971,11 @@ def sync_messenger(
             ce_type = CommonMaicaWarning
 
         if not info:
-            info = "Auto exception from unified exception: "
+            info = f"Auto exception from unified exception: {str(error)}"
 
-        new_error = ce_type(f"{info}{str(error)}")
+        new_error = ce_type(info)
         new_error.__cause__ = error
         error = new_error
-
-        # Avoid interrupting followings
-        info = ''
 
     # For separator lines
     try:
@@ -985,7 +994,10 @@ def sync_messenger(
         status = error.status if not status else status
         info = error.message if not info else info
         code = error.error_code if not code else code
-        no_print = False if error.print is not False else True
+        if error.print is True:
+            no_print = False
+        elif error.print is False:
+            no_print = True
 
         if (
             isinstance(error, CommonMaicaError)

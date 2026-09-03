@@ -106,6 +106,29 @@ async def _vision_host_allowed(host: str, raw_rules: str) -> bool:
         return True
     return allow_unmarked and not deny_unmarked
 
+
+def _contains_embedded_vision(value: Any) -> bool:
+    """Detect model-bound image inputs outside the validated vision field."""
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            content_type = current.get("type")
+            if (
+                isinstance(content_type, str)
+                and content_type in {"image_url", "input_image"}
+            ):
+                return True
+            for key, nested in current.items():
+                if key in {"image_url", "image_urls"} and nested:
+                    return True
+                pending.append(nested)
+        elif isinstance(current, list):
+            pending.extend(current)
+
+    return False
+
+
 class WsBasicConfig(BaseModel):
     type: Literal["auth", "ping", "sping", "reconn", "params", "query"]
 
@@ -133,18 +156,15 @@ class WsQueryConfig(WsBasicConfig):
     """This takes and validates a query input."""
     type: Literal["query"]
 
-    class MCommonConfig(BaseModel):
-        bypass_mf: bool = False
-        bypass_mt: bool = False
-        bypass_stream: bool = False
-        twk_super: bool = False
-        strict_conv: bool = True
+    class MCommonConfig(MaicaSettings.Temp.Common):
+        ...
 
     class MSpireConfig(MCommonConfig, MaicaSettings.Temp.MSpire):
 
         # And its defaults
         bypass_mf: bool = True
         bypass_mt: bool = True
+        twk_info: bool = True
 
     class MPostalConfig(MCommonConfig, MaicaSettings.Temp.MPostal):
         """content is enforced for MPostal, ofc."""
@@ -154,6 +174,7 @@ class WsQueryConfig(WsBasicConfig):
         bypass_mt: bool = True
         bypass_stream: bool = True
         twk_super: bool = True
+        twk_info: bool = True
         strict_conv: bool = False
 
     class MVistaConfig(RootModel):
@@ -283,6 +304,11 @@ class WsQueryConfig(WsBasicConfig):
                 
                 if self.activated != "query":
                     raise MaicaInputWarning("MS/MP not allowed for session -1")
+
+                if _contains_embedded_vision(self.query):
+                    raise MaicaInputWarning(
+                        "Session -1 image inputs must use the top-level vision field"
+                    )
             
             if (
                 self.chat_session >= 0

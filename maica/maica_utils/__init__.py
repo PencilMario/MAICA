@@ -73,6 +73,7 @@ from .maica_utils import (
     PydSoftResetMixin,
     RobustList,
     SafeFormatDict,
+    replace_prompt_placeholders,
     GenCorrectionModel,
     DummyClass,
 )
@@ -82,7 +83,7 @@ from .setting_utils import MaicaSettings
 from .fsc_early import AllowArb, RealtimeSocketsContainer
 from .encryption_utils import CryptoObject, crypto_object, decrypt_token, encrypt_token, sign_message, verify_message
 from .fsc_late import ConnSocketsContainer, FullSocketsContainer
-from .get_a_sentence import SentenceOfTheDay
+from .get_a_sentence import get_sentence
 from .locater import locater, get_inner_path, get_outer_path
 from .gvars import online_dict, G
 from .chat_session import MaicaSession, MaicaSessionItem
@@ -173,6 +174,7 @@ __all__ = [
     'PydSoftResetMixin',
     'RobustList',
     'SafeFormatDict',
+    'replace_prompt_placeholders',
     'GenCorrectionModel',
     'DummyClass',
     'LanceVectorStore',
@@ -187,7 +189,7 @@ __all__ = [
     'encrypt_token',
     'sign_message',
     'verify_message',
-    'SentenceOfTheDay',
+    'get_sentence',
     'locater',
     'get_inner_path',
     'get_outer_path',

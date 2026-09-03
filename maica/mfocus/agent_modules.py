@@ -146,7 +146,10 @@ class AgentTools():
         except CommonMaicaException as ce:
             text = "查询不到当前的天气." if target_lang == 'zh' else "Cannot acquire current weather."
             weather = None
-            await self.fsc.messenger('maica_mfocus_weather_failed', error=ce)
+            if kwargs.get("const"):
+                await self.fsc.messenger('maica_mfocus_weather_failed', code=204, error=ce)
+            else:
+                await self.fsc.messenger('maica_mfocus_weather_failed', error=ce)
 
         return text, weather
 
@@ -392,7 +395,7 @@ class AgentTools():
             case 1:
                 res = await self.sp.filter_reranker(query)
             case 2:
-                res = await self.sp.filter_milvus(query)
+                res = await self.sp.filter_vector(query)
 
         res = self.AgentPersistents(res)
         res.target_lang = target_lang

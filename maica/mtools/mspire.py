@@ -80,33 +80,41 @@ async def _fetch_ms_meta(
             raise MaicaInternetWarning(f"Wikipedia page does not exist: {title}")
         return await page.summary
     
-    async def get_category(title: str):
+    async def get_category(title: str, use_search=False):
         await fsc.messenger(
             "maica_mspire_searching",
-            f"MSpire searching category: {title}",
+            f"MSpire searching {'pseudo ' if use_search else ''}category: {title}",
             200,
         )
-        cate = wiki_cursor.page(title)
-        members = await cate.categorymembers
 
-        cates = []
-        pages = []
-        for member in members.values():
-            if _is_not_template(member.title):
-                match member.ns:
-                    case Namespace.MAIN:
-                        pages.append(member.title)
-                    case Namespace.CATEGORY:
-                        cates.append(member.title)
+        if use_search:
+            cates, pages = await asyncio.gather(
+                fuzzy_search(title, ns=Namespace.CATEGORY, limit=ms_m.sample, no_raise=True),
+                fuzzy_search(title, limit=ms_m.sample, no_raise=True),
+            )
+
+        else:
+            cate = wiki_cursor.page(title)
+            members = await cate.categorymembers
+
+            cates = []
+            pages = []
+            for member in members.values():
+                if _is_not_template(member.title):
+                    match member.ns:
+                        case Namespace.MAIN:
+                            pages.append(member.title)
+                        case Namespace.CATEGORY:
+                            cates.append(member.title)
 
         sync_messenger(info=f"Found {len(cates)} categories and {len(pages)} pages underlying", type=MsgType.DEBUG)
         return cates, pages
     
     ctg_decay_factor = 0.8
 
-    async def recur_random(title: str, remaining_depth: int):
+    async def recur_random(title: str, remaining_depth: int, use_search=False):
         remaining_depth -= 1
-        cates, pages = await get_category(title)
+        cates, pages = await get_category(title, use_search)
 
         # Sampling
         prob_cates = len(cates) * ms_m.ctg_weight * (1 - (1 / remaining_depth) * ctg_decay_factor)
@@ -132,7 +140,7 @@ async def _fetch_ms_meta(
             # We leave candidates in case one does not pass censoring
             return pages
 
-    async def fuzzy_search(kwd: str, ns: int = Namespace.MAIN, limit: int = 1):
+    async def fuzzy_search(kwd: str, ns: int = Namespace.MAIN, limit: int = 1, no_raise=False):
         results = await wiki_cursor.search(
             query=kwd,
             ns=ns,
@@ -141,7 +149,12 @@ async def _fetch_ms_meta(
         members = [i.title for i in results.pages.values()]
 
         if not members:
-            raise MaicaInternetWarning(f"No result for kwd={kwd} ns={ns}")
+            msg = f"No result for kwd={kwd} ns={ns}"
+            if not no_raise:
+                raise MaicaInternetWarning(msg)
+            else:
+                sync_messenger(info=msg, type=MsgType.DEBUG)
+                members = []
         
         return members
     
@@ -150,17 +163,15 @@ async def _fetch_ms_meta(
 
     match ms_m.type:
         case "precise_page":
-            step_1 = await fuzzy_search(title)
-            result = step_1
+            result = [title]
 
         case "fuzzy_page":
             step_1 = await fuzzy_search(title, limit=ms_m.sample)
             result = step_1
 
         case "in_precise_category":
-            step_1 = await fuzzy_search(title, ns=Namespace.CATEGORY)
-            step_2 = step_1[0]
-            recur_res = await recur_random(step_2, 10)
+            step_1 = "Category:" + title
+            recur_res = await recur_random(step_1, 10)
             result = recur_res
 
         case "in_fuzzy_category":
@@ -170,8 +181,7 @@ async def _fetch_ms_meta(
             result = recur_res
 
         case "in_fuzzy_all":
-            title = "Category:" + title
-            recur_res = await recur_random(title, 10)
+            recur_res = await recur_random(title, 10, use_search=True)
             result = recur_res
 
     result: list[str]
@@ -233,7 +243,7 @@ MsFromCacheResult = MaicaSettings.Temp.MSpire.MsFromCacheResult
 async def ms_from_cache(prompt: str, fsc: FullSocketsContainer):
 
     prompt_sha = await hash_sha256(prompt)
-    mfc_m = MsFromCacheResult(hash=prompt_sha)
+    mfc_m = MsFromCacheResult(hash=prompt_sha, prompt=prompt)
 
     async with DatabaseUtils.SessionData() as dbs:
 
@@ -263,6 +273,7 @@ async def ms_to_cache(mfc_m: MsFromCacheResult, fsc: FullSocketsContainer):
                 {"hash": mfc_m.hash},
                 {
                     "user_id": fsc.maica_settings.verification.user_id,
+                    "prompt": mfc_m.prompt,
                     "content": mfc_m.result,
                 }
             )
