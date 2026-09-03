@@ -4,24 +4,51 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import lancedb
 import pyarrow as pa
 
 
 _FILTER_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCHEMA_FIELDS = {
+    "id",
+    "user_id",
+    "chat_session_num",
+    "type",
+    "raw_text",
+    "is_prod",
+    "vector",
+}
+_FILTER_FIELDS = _SCHEMA_FIELDS - {"id", "raw_text", "vector"}
+_INTEGER_FILTERS = {"user_id", "chat_session_num"}
+_BOOLEAN_FILTERS = {"is_prod"}
+_STRING_FILTERS = {"type"}
 
 
-def _filter_expr(filters: dict[str, Any] | None) -> str | None:
+def _filter_expr(filters: Mapping[str, Any] | None) -> str | None:
+    if filters is None:
+        return None
+    if not isinstance(filters, Mapping):
+        raise TypeError("filters must be a mapping")
     if not filters:
         return None
     clauses = []
     for key, value in filters.items():
-        if not _FILTER_KEY.fullmatch(key):
+        if not isinstance(key, str) or not _FILTER_KEY.fullmatch(key):
             raise ValueError(f"invalid vector filter field: {key}")
+        if key not in _FILTER_FIELDS:
+            raise ValueError(f"invalid vector filter field: {key}")
+        if key in _INTEGER_FILTERS and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(f"invalid vector filter value for {key}")
+        if key in _BOOLEAN_FILTERS and not isinstance(value, bool):
+            raise ValueError(f"invalid vector filter value for {key}")
+        if key in _STRING_FILTERS and not isinstance(value, str):
+            raise ValueError(f"invalid vector filter value for {key}")
         if isinstance(value, bool):
             literal = "true" if value else "false"
         elif isinstance(value, (int, float)):
@@ -32,6 +59,15 @@ def _filter_expr(filters: dict[str, Any] | None) -> str | None:
             raise ValueError(f"unsupported vector filter value for {key}")
         clauses.append(f"{key} = {literal}")
     return " AND ".join(clauses)
+
+
+def _validate_texts(data: Iterable[str]) -> list[str]:
+    if isinstance(data, (str, bytes)):
+        raise TypeError("vector text data must be an iterable of strings, not a scalar")
+    texts = list(data)
+    if any(not isinstance(text, str) for text in texts):
+        raise TypeError("raw_text values must be strings")
+    return list(dict.fromkeys(texts))
 
 
 class LanceVectorStore:
@@ -45,7 +81,7 @@ class LanceVectorStore:
 
     @classmethod
     async def async_create(cls, path: str | Path, dimensions: int, table_name: str | None = None):
-        if dimensions <= 0:
+        if isinstance(dimensions, bool) or not isinstance(dimensions, int) or dimensions <= 0:
             raise ValueError("vector dimensions must be positive")
         name = table_name or cls.table_name
 
@@ -54,10 +90,22 @@ class LanceVectorStore:
             names = db.list_tables().tables or []
             if name in names:
                 table = db.open_table(name)
-                vector_type = table.schema.field("vector").type
+                try:
+                    vector_type = table.schema.field("vector").type
+                except KeyError as exc:
+                    raise ValueError("vector schema is missing the vector field") from exc
                 actual = vector_type.list_size if pa.types.is_fixed_size_list(vector_type) else None
                 if actual != dimensions:
-                    raise ValueError(f"vector dimension mismatch: stored={actual}, configured={dimensions}")
+                    raise ValueError(
+                        f"vector dimension mismatch: stored={actual}, configured={dimensions}"
+                    )
+                if vector_type.value_type != pa.float32():
+                    raise ValueError(
+                        f"vector schema mismatch: stored={vector_type}, configured=float32[{dimensions}]"
+                    )
+                missing_fields = _SCHEMA_FIELDS - set(table.schema.names)
+                if missing_fields:
+                    raise ValueError(f"vector schema is missing fields: {sorted(missing_fields)}")
             else:
                 schema = pa.schema([
                     pa.field("id", pa.string(), nullable=False),
@@ -75,12 +123,12 @@ class LanceVectorStore:
         return cls(db, table, dimensions)
 
     @staticmethod
-    def _record_id(text: str, filters: dict[str, Any] | None) -> str:
+    def _record_id(text: str, filters: Mapping[str, Any] | None) -> str:
         scope = repr(sorted((filters or {}).items())).encode("utf-8")
         return hashlib.sha256(scope + b"\0" + text.encode("utf-8")).hexdigest()
 
     async def _embed(self, embedding_conn, data: Iterable[str]):
-        texts = list(dict.fromkeys(data))
+        texts = _validate_texts(data)
         if not texts:
             return []
         response = await embedding_conn.make_embedding(input=texts)
@@ -90,11 +138,16 @@ class LanceVectorStore:
                 raise ValueError(f"embedding dimension mismatch for {text!r}: {len(vector)} != {self.dimensions}")
         return pairs
 
+    def _ensure_open(self):
+        if self.table is None or self.db is None:
+            raise RuntimeError("LanceVectorStore is closed")
+
     async def sync_texts(self, embedding_conn, data: Iterable[str], unique: str = "raw_text", filters=None):
         if unique != "raw_text":
             raise ValueError("LanceVectorStore only supports raw_text uniqueness")
-        requested = set(data)
+        requested = set(_validate_texts(data))
         expression = _filter_expr(filters)
+        self._ensure_open()
         async with self._write_lock:
             def read_old():
                 query = self.table.search().select(["id", "raw_text"])
@@ -126,8 +179,14 @@ class LanceVectorStore:
                 await asyncio.to_thread(self.table.add, rows)
 
     async def search(self, embedding_conn, data: Iterable[str], filters=None, topk: int = 5, similarity_min: float = 0.5):
-        embedded = await self._embed(embedding_conn, data)
+        if isinstance(topk, bool) or not isinstance(topk, int) or topk <= 0:
+            raise ValueError("topk must be a positive integer")
+        if isinstance(similarity_min, bool) or not isinstance(similarity_min, (int, float)) or not math.isfinite(similarity_min):
+            raise ValueError("similarity_min must be a finite number")
+        self._ensure_open()
+        texts = _validate_texts(data)
         expression = _filter_expr(filters)
+        embedded = await self._embed(embedding_conn, texts)
         results: set[str] = set()
         for _, vector in embedded:
             def query():
