@@ -2,14 +2,28 @@
 
 ## Source verification
 
-- `python -m pytest tests/test_vector_store.py tests/test_http_and_images.py -q`
-  passed: 8 tests.
-- Running the suite after setting the existing test baseline
-  `G.A.MCORE_GENERIC = "0"` passed: 45 tests.
+- `python -m pytest -q` passed: 128 tests.
+- `python -m ruff check maica tests examples` passed with no findings.
+- `python -m compileall -q maica tests examples` passed.
+- `python -m pip check` reported `No broken requirements found.`
 - `python examples/lancedb_nuitka_probe.py <temporary-path>` printed
   `LANCEDB_PROBE_OK` on two consecutive processes using the same external
   database directory.
-- LanceDB 0.34.0 and PyArrow 25.0.0 were tested on CPython 3.13.7 / Windows 11.
+- The final native probe was run twice against a fresh external directory and
+  printed `LANCEDB_PROBE_OK` both times.
+- LanceDB 0.34.0, lance-namespace 0.9.0, and PyArrow 25.0.0 were tested on
+  CPython 3.13.7 / Windows 11.
+
+## Legacy surface verification
+
+- The active source, tests, examples, requirements, build script, README, and
+  deployment/maintenance documents contain no `pymilvus`, `Milvus`,
+  `MAICA_MILVUS_*`, `MilvusSearchMixin`, `to_milvus`, `filter_milvus`,
+  `cross_insert`, or `embed_search` references.
+- Historical migration notes and the LanceDB design/plan records retain the
+  old backend name only as migration context.
+- `maica.maica_utils` imports successfully without importing any Milvus module;
+  `LanceVectorStore` is the exported vector-store owner.
 
 ## Nuitka verification
 
@@ -45,8 +59,6 @@ support.
 
 ## Existing test-environment issue
 
-Running `pytest -q` from a process that has not initialized MAICA configuration
-leaves `G.A.MCORE_GENERIC` as an empty string and causes two unrelated tests to
-fail while converting it with `int()`. Initializing that existing baseline to
-`"0"` produces 45 passing tests. This task does not change that unrelated
-configuration behavior.
+The full suite now passes from the clean worktree. Callers that manually load
+an incomplete environment can still leave `G.A.MCORE_GENERIC` empty; that
+pre-existing configuration behavior is outside this migration.
