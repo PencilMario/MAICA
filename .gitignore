@@ -168,6 +168,7 @@ profile.html
 profile.json
 
 # MAICA
+.worktrees/
 .essentials_generated.sh
 .essentials_generated.ps1
 .servers
