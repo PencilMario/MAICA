@@ -45,6 +45,8 @@ MAICA 要求 Python 3.12 或更高版本。生成 `.env` 后，至少检查以�
 
 SQLite 部署将 `MAICA_DB_ADDR` 设为 `sqlite`，且认证库与数据库必须是不同文件。公开服务建议使用 MySQL/MariaDB。首次启动会生成 RSA 密钥、数据库表和 `.initialized` 迁移标记；不要在未备份的情况下删除或替换 `maica/keys/prv.key`。
 
+RAG 启用时使用嵌入式 LanceDB。`MAICA_VECTOR_DB_PATH` 指定向量数据库目录，默认值为 `fs_storage/vector_db`；目录必须可写并位于持久化存储中。使用 Nuitka one-file 版本时，不要将该目录放在程序的临时解压目录内，否则重启后数据会丢失。向量是可由源数据重建的派生缓存，但保留该目录可避免不必要的重建。
+
 # 网络与安全
 
 默认监听地址为 `0.0.0.0:5000`（WebSocket）和 `0.0.0.0:6000`（HTTP），分别由 `MAICA_WS_HOST/PORT`、`MAICA_HTTP_HOST/PORT` 控制。公开部署应使用反向代理提供 HTTPS/WSS，并限制管理网络和数据库端口。

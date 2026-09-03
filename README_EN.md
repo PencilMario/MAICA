@@ -71,6 +71,8 @@ maica -e .env
 
 WebSocket and HTTP listen on ports 5000 and 6000 by default. See `maica/env_basis`, `document/Backend Deployment.md`, and `document/API Documents.md` for configuration and protocol details.
 
+When `MAICA_EMBEDDING_ADDR` is configured, RAG stores derived vectors in embedded LanceDB. Set `MAICA_VECTOR_DB_PATH` to a persistent writable directory; it defaults to `fs_storage/vector_db`. For Nuitka one-file deployments, keep this directory outside the temporary extraction directory.
+
 ## Development
 
 ```bash

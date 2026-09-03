@@ -71,6 +71,8 @@ maica -e .env
 
 默认监听 WebSocket `:5000` 与 HTTP `:6000`，可通过 `MAICA_WS_HOST/PORT` 和 `MAICA_HTTP_HOST/PORT` 修改。完整配置项及说明见 [`maica/env_basis`](maica/env_basis)；部署步骤见 [`document/Backend Deployment.md`](document/Backend%20Deployment.md)，接口协议见 [`document/API Documents.md`](document/API%20Documents.md)。
 
+启用 `MAICA_EMBEDDING_ADDR` 后，RAG 使用嵌入式 LanceDB 保存向量。持久化目录由 `MAICA_VECTOR_DB_PATH` 指定，默认是 `fs_storage/vector_db`；目录必须可写并位于持久化存储中，打包为 Nuitka one-file 时不要放在临时解压目录。
+
 ## 开发与验证
 
 ```bash

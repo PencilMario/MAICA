@@ -19,6 +19,7 @@ If you want to read in English, use a translator.
 * LLM 输出统一由 `llm_request()` 解析 Responses API 的流式与非流式事件。
 * LLM 输入统一使用 Responses API 格式；多模态内容块必须为 `input_text` / `input_image`，不得重新引入 Chat Completions 的 `text` / `image_url` 内容块。
 * schema 迁移全部成功后才能推进 `.initialized` 中的版本。
+* RAG 向量只使用嵌入式 LanceDB；`MAICA_VECTOR_DB_PATH` 默认是 `fs_storage/vector_db`，必须指向可写的持久化目录，并位于 Nuitka one-file 临时解压目录之外。
 
 ## 验证
 

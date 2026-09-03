@@ -7,7 +7,7 @@ from maica.maica_utils.vector_store import LanceVectorStore
 
 
 async def main() -> None:
-    path = os.getenv("MAICA_VECTOR_DB_PATH", "maica/fs_storage/vector_db")
+    path = os.getenv("MAICA_VECTOR_DB_PATH", "fs_storage/vector_db")
     dimensions = int(os.getenv("MAICA_EMBEDDING_DIMS", "4096"))
     store = await LanceVectorStore.async_create(path, dimensions=dimensions)
     try:
