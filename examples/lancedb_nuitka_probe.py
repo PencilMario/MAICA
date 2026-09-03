@@ -29,6 +29,14 @@ async def main() -> None:
     rows = table.search([1.0, 0.0, 0.0, 0.0], query_type="vector").where("user_id = -1").limit(1).to_list()
     if not rows or rows[0]["raw_text"] != "alpha":
         raise AssertionError(f"unexpected search result: {rows!r}")
+    db._conn.close()
+
+    reopened = lancedb.connect(str(db_path))
+    table = reopened.open_table("probe")
+    rows = table.search([1.0, 0.0, 0.0, 0.0], query_type="vector").where("user_id = -1").limit(1).to_list()
+    if not rows or rows[0]["raw_text"] != "alpha":
+        raise AssertionError(f"unexpected reopened search result: {rows!r}")
+    reopened._conn.close()
     print("LANCEDB_PROBE_OK")
 
 

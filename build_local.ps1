@@ -93,7 +93,7 @@ function Install-Dependencies {
         Write-Success "requirements.txt installed"
 
         Write-Info "Installing additional packages for MAICA..."
-        & $script:PythonPath -m pip install python-magic-bin packaging pymilvus
+        & $script:PythonPath -m pip install python-magic-bin packaging
         if ($LASTEXITCODE -ne 0) {
             Write-Error-Custom "Failed to install additional packages"
             exit 1
@@ -175,7 +175,6 @@ function Build-MAICA {
             "--include-package=lancedb",
             "--include-package=lance_namespace",
             "--include-package=pyarrow",
-            "--include-package=pymilvus",
             "--include-package-data=magic",
             "--include-data-files=maica/env_basis=env_basis",
             "--nofollow-import-to=maica.Lib",
