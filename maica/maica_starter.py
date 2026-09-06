@@ -358,6 +358,7 @@ def validate_config():
         "GC_SESSIONS": (0, None),
         "ROTATE_MSCACHE": (0, None),
         "ROTATE_MVISTA": (0, None),
+        "ROTATE_VECTOR": (0, None),
         "SESSION_MAX_LENGTH": (1, None),
         "CENSOR_MSPIRE": (0, None),
         "CENSOR_QUERY": (0, None),

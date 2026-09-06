@@ -199,9 +199,9 @@ class MaicaSettings(BaseModel):
         """Conclude archived / purged sessions into summarizations."""
         nsfw_acceptive: bool = True
         """Alter prompt to ask model to handle toxic topics positively."""
-        mf_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 1
+        mf_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 0
         """Add history rounds for MFocus to understand the conversation."""
-        mt_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 1
+        mt_context_rnds: Literal[0, 1, 2, 3, 4, 5] = 0
         """Add history rounds for MFocus to understand the conversation."""
         gen_quality_chk: bool = False
         """Check and warn about context quality descalation using MNerve."""

@@ -1,10 +1,10 @@
 # It's suggested to exclude these lines (the top block) in your env configuration
 # Current backend version, only change when it's ready for release
-MAICA_CURR_VERSION = '1.3.004'
+MAICA_CURR_VERSION = '1.3.004.post1'
 # Oldest capable backend version
 MAICA_LEGC_VERSION = '1.3.004'
 # Frontend version announcement(s)
-MAICA_BLESSLAND_CAPV = '1.8.19'
+MAICA_BLESSLAND_CAPV = '1.9.0'
 # cp ./env_basis ./.env
 # vim .env
 # Do not mv, rm or edit basis! They're required as default templates.
@@ -183,6 +183,8 @@ MAICA_ROTATE_MSCACHE = '0'
 MAICA_KEEP_MVISTA = '3'
 # Delete each MVista img after [] hours or not
 MAICA_ROTATE_MVISTA = '8'
+# Delete savefile vector references after [] hours or not
+MAICA_ROTATE_VECTOR = '168'
 # Use responses standard searching tool instead of normal serp or not
 MAICA_RESPONSES_SERP = '1'
 # No send 5xx exceptions' real content or do

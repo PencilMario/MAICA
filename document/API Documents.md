@@ -125,10 +125,13 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
 
 在长连接建立后, 你应该先发送令牌:
 
-`{"type": "auth", "access_token": "你的令牌"}`
+`{"type": "auth", "access_token": "你的令牌", "frontend_id": "前端身份信息"}`
 
 > ~~自v1.2.000.rc11后, 登录阶段也建议添加type. 未来版本可能弃用旧的行为.~~  
 > 自v1.3后, 所有请求必须包含type, 自动推断已弃用.
+
+> 自v1.3.004.post1后, 登录阶段开始接受可选的前端身份信息字段(类似UA). 其规范为<类型>|<版本号>, 如`blessland|1.9.1`.  
+> 这一行为可能在未来被强制, 建议尽可能添加实现.
 
 若令牌验证无误, 该会话就已经登录完毕.
 
@@ -177,8 +180,8 @@ MFocus等的主要思路, 是通过一个未微调的agent模型与核心模型�
         "mf_precheck_mt": true,
         "memory_concl_arc": 1,
         "nsfw_acceptive": true,
-        "mf_context_rnds": 1,
-        "mt_context_rnds": 1,
+        "mf_context_rnds": 0,
+        "mt_context_rnds": 0,
         "tz": null,
         "gen_quality_chk": false,
         "mf_disable_loop": true,
@@ -1081,8 +1084,8 @@ query可以携带临时的触发器表, 并临时添加到上传的触发器表.
     "max_tokens": 1600,
     "mf_llm_concl": false,
     "nsfw_acceptive": true,
-    "mt_context_rnds": 1,
-    "mf_context_rnds": 1,
+    "mt_context_rnds": 0,
+    "mf_context_rnds": 0,
     "presence_penalty": 0.34,
     "seed": null,
     "savefile_access": true,
