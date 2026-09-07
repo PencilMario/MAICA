@@ -15,6 +15,16 @@ _Bt = BilingualText
 type DayFormat = Tuple[datetime.date, int]
 type DaysFormat = List[DayFormat]
 
+agent_tools = (
+    'time_acquire',
+    'date_acquire',
+    'weather_acquire',
+    'event_acquire',
+    'persistent_acquire',
+    'search_internet',
+    'vista_acquire,'
+)
+
 
 class AgentTools():
     """
@@ -62,6 +72,10 @@ class AgentTools():
         
         Currently using:
         - event_acquire
+        - vista_acquire
+
+        Where not to use them:
+        Those nulls are not valuable info. They'll just distract the model.
         """
         mark_true = False
 
@@ -92,6 +106,7 @@ class AgentTools():
             
         return time_now
 
+
     async def time_acquire(self, *args, **kwargs):
         """
         Gets current time.
@@ -108,6 +123,7 @@ class AgentTools():
 
         return text, dt
 
+
     async def date_acquire(self, *args, **kwargs):
         """
         Gets current date.
@@ -123,6 +139,7 @@ class AgentTools():
         text = f"今天是{text}" if target_lang == 'zh' else f"Today is {text}"
 
         return text, dt
+
 
     async def weather_acquire(self, location: Optional[str] = None, *args, **kwargs):
         """
@@ -152,6 +169,7 @@ class AgentTools():
                 await self.fsc.messenger('maica_mfocus_weather_failed', error=ce)
 
         return text, weather
+
 
     class AgentEvents(Reparsable, MarkableBool, List[
             Tuple[
@@ -360,6 +378,7 @@ class AgentTools():
 
         return text, search_results
 
+
     class AgentPersistents(Reparsable, list[str]):
         target_lang: TargetLangType = "zh"
 
@@ -404,6 +423,7 @@ class AgentTools():
 
         return text, res
 
+
     class AgentInternets(Reparsable, list[str]):
         target_lang: TargetLangType = "zh"
 
@@ -441,7 +461,8 @@ class AgentTools():
 
         return text, res
 
-    class AgentVistas(Reparsable, list[str]):
+
+    class AgentVistas(Reparsable, MarkableBool, list[str]):
         target_lang: TargetLangType = "zh"
 
         def agent_reparse(self):
@@ -483,7 +504,11 @@ class AgentTools():
 
         text = res.agent_reparse()
 
+        if kwargs.get("force_disp"):
+            res.mark_true = True
+
         return text, res
+
 
 if __name__ == "__main__":
     from maica import init
