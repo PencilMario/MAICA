@@ -275,7 +275,7 @@ class MaicaSettings(BaseModel):
             )
             title: Union[str, list[str | BilingualText]] = Field(
                 default_factory=lambda: [
-                    _Bt('自然', 'Nature'),
+                    _Bt('自然', 'Natural_environment'),
                     _Bt('自然科学', 'Natural_sciences'),
                     _Bt('社会', 'Society'),
                     _Bt('人文學科', 'Humanities'),
