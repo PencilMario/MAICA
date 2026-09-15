@@ -175,6 +175,14 @@ _session_0_9 = (
         le=9,
     ),
 )
+_session_n1_9 = (
+    Optional[int],
+    Field(
+        default=0,
+        ge=-1,
+        le=9,
+    ),
+)
 _session_1_9 = (
     Optional[int],
     Field(
@@ -371,7 +379,7 @@ class ShortConnHandler(View):
     _tr_m = pyd_http_factory(
         model_postfix="tr_m",
         access_token=(str, ...),
-        chat_session=_session_0_9,
+        chat_session=_session_n1_9,
         content=(list, ...),
     )
     async def upload_trigger(self):
@@ -388,7 +396,7 @@ class ShortConnHandler(View):
     _dtr_m = pyd_http_factory(
         model_postfix="tr_m",
         access_token=(str, ...),
-        chat_session=_session_0_9,
+        chat_session=_session_n1_9,
     )
     async def delete_trigger(self):
         """DELETE"""

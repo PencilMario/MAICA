@@ -50,6 +50,9 @@ class SessionPersistent(DbBoundObject, SessionPersistentMixin, SessionPersistent
 class SessionTrigger(DbBoundObject, SessionTriggerMixin, SessionTriggerLlmMixin):
 
     _model = SqlTrigger
+    # Session -1 is frontend-managed for conversation history, but its
+    # trigger table remains backend-managed and can still drive MTrigger.
+    SESSION_DB_MIN = -1
 
     def clear(self):
         self.clear_temp()

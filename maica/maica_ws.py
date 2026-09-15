@@ -277,8 +277,9 @@ class WsCoroutine(NoWsCoroutine):
             
             # They're not required at all if just resetting session
             if not ws_config.reset:
-                # We skip sp.from_db if sf_access is not enabled at all
-                if self.settings.basic.savefile_access:
+                # Savefile access is unavailable for session -1, since it works through MFocus which relies on prompt modifying
+                # Session -1's prompt is fe managed, so not appliable
+                if self.settings.savefile_loadable:
                     fdb1.add(sp.from_db())
                 fdb1.add(st.from_db())
 

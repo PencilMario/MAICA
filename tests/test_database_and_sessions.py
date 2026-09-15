@@ -21,6 +21,7 @@ from maica.maica_utils import (
     SqlUser,
     RealtimeSocketsContainer,
     SessionPersistent,
+    SessionTrigger,
     crypto_object,
     online_dict,
     sqla_create_or_update,
@@ -28,6 +29,7 @@ from maica.maica_utils import (
 from maica.maica_utils import session_mgr, stream_buffer
 from maica.maica_utils.database_utils import ReadOnlySession
 from maica.maica_utils.users_utils import FscUsersFuncMixin
+from maica.maica_http import ShortConnHandler
 from maica.initializer.migrations import migration_4, migration_5, migration_6
 
 
@@ -107,6 +109,46 @@ def test_db_bound_object_loads_blank_text_as_empty_content() -> None:
     persistent = SessionPersistent()
     persistent.load("   ")
     assert persistent.content == {}
+
+
+def test_trigger_table_supports_frontend_managed_session_minus_one() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        old_factory = DatabaseUtils.SessionData
+        DatabaseUtils.SessionData = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(SqlBaseData.metadata.create_all)
+
+            fsc = FullSocketsContainer()
+            fsc.maica_settings.verification.user_id = 1
+
+            trigger = SessionTrigger(-1, fsc)
+            trigger.load([])
+            await trigger.to_db(skip_sync=True)
+
+            loaded = SessionTrigger(-1, fsc)
+            await loaded.from_db()
+
+            assert loaded.prim_key_id == trigger.prim_key_id
+            assert loaded.content == []
+        finally:
+            DatabaseUtils.SessionData = old_factory
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_trigger_http_schema_accepts_session_minus_one() -> None:
+    query = ShortConnHandler._tr_m.model_validate(
+        {
+            "access_token": "token",
+            "chat_session": -1,
+            "content": [],
+        }
+    )
+
+    assert query.chat_session == -1
 
 
 def test_persistent_info_respects_temp_and_persistent_boundaries() -> None:

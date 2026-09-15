@@ -410,6 +410,13 @@ class MaicaSettings(BaseModel):
                 and self.temp.mspire.use_cache
             )
         )
+
+    @property
+    def savefile_loadable(self):
+        return (
+            self.temp.chat_session >= 0
+            and self.basic.savefile_access
+        )
     
     @property
     def super_writable(self):
